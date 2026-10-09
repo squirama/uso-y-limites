@@ -11,9 +11,9 @@ import threading
 import time
 import tkinter as tk
 
-from PIL import ImageTk
+from PIL import Image, ImageTk
 
-from . import render
+from . import capture, glass, render
 from .claude_probe import ClaudeProbe
 from .codex import CodexClient
 from .fullscreen import foreground_is_fullscreen
@@ -31,9 +31,12 @@ BREAK = 70           # Pull needed to tear the widget off its edge.
 RESIST = 0.28        # Fraction of the pull that moves the widget while attached.
 CORNER = 40          # Distance at which the widget locks into a corner.
 FRAME_MS = 15
+GLASS_REFRESH_MS, GLASS_AWAY_MS = 100, 1000
 POLL_MS, WATCH_MS, HOVER_MS, CLOCK_MS, CODEX_MS = 200, 3000, 60, 1000, 30000
 IDLE_THRESHOLD_SECONDS, RESUME_THRESHOLD_SECONDS = 300, 5
 AWAY_CLAUDE_SECONDS, AWAY_CODEX_MS = 1800, 300000
+GLASS_SETTLE_SECONDS, GLASS_TRANSITION_MS = 3, 300
+GLASS_OPACITY = {"compact": 0.26, "rest": 0.08, "expanded": 0.58}
 LABELS = {"claude": {"5 horas": "Sesión", "7 días": "Semana"}, "codex": {}}
 
 
@@ -62,6 +65,45 @@ def work_area(x, y, root):
     return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
 
 
+def monitor_scale(x, y, root):
+    """Return the effective display scale for the monitor containing a screen point."""
+    if os.name == "nt":
+        try:
+            user32, shcore = ctypes.windll.user32, ctypes.windll.shcore
+            user32.MonitorFromPoint.restype = ctypes.c_void_p
+            user32.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
+            monitor = user32.MonitorFromPoint(ctypes.wintypes.POINT(int(x), int(y)), 2)
+            if monitor:
+                dpi_x, dpi_y = ctypes.wintypes.UINT(), ctypes.wintypes.UINT()
+                shcore.GetDpiForMonitor.restype = ctypes.c_long
+                shcore.GetDpiForMonitor.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                                    ctypes.POINTER(ctypes.wintypes.UINT),
+                                                    ctypes.POINTER(ctypes.wintypes.UINT)]
+                if shcore.GetDpiForMonitor(monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) == 0:
+                    return max(1.0, dpi_x.value / 96)
+        except (AttributeError, OSError):
+            pass
+    return max(1.0, root.winfo_fpixels("1i") / 96)
+
+
+def set_per_monitor_dpi_awareness():
+    """Request per-monitor v2 coordinates before creating Tk windows."""
+    if os.name != "nt":
+        return
+    try:
+        setter = ctypes.windll.user32.SetProcessDpiAwarenessContext
+        setter.restype = ctypes.wintypes.BOOL
+        setter.argtypes = [ctypes.c_void_p]
+        if setter(ctypes.c_void_p(-4)):
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        pass
+
+
 def vertical(side):
     return side in ("left", "right")
 
@@ -77,7 +119,8 @@ def smooth(t):
 class App:
     def __init__(self, root, data_dir=DATA_DIR, network=True, providers=None, idle_getter=idle_seconds,
                  notifier=send_notification, fullscreen_getter=foreground_is_fullscreen,
-                 layered_factory=LayeredWindow):
+                 layered_factory=LayeredWindow, capture_fn=capture.capture_screen,
+                 capture_exclusion_fn=capture.set_capture_exclusion):
         self.root = root
         self.data_dir = Path(data_dir)
         self.network = network
@@ -114,6 +157,22 @@ class App:
         self.render_mode_preference = self.settings.get("render_mode", "auto")
         self.render_mode = "colorkey"
         self.layered = None
+        self.capture_fn = capture_fn
+        self.capture_exclusion_fn = capture_exclusion_fn
+        self.glass_preference = self.settings.get("glass", True)
+        self.glass_active = False
+        self.glass_failed = False
+        self.glass_background = None
+        self.glass_signature = None
+        self.glass_surface = None
+        self.glass_surface_key = None
+        self.glass_timer = None
+        self.glass_events = queue.Queue(maxsize=1)
+        self.glass_worker = None
+        self.glass_generation = 0
+        self.glass_pointer_out_since = time.monotonic()
+        self.glass_opacity = GLASS_OPACITY["compact"]
+        self.glass_transition = None
         self.alerts_enabled = self.settings.get("alerts", True)
         self.provider_override = providers is not None
         selected = providers if self.provider_override else self.settings.get("providers", ["claude", "codex"])
@@ -125,7 +184,9 @@ class App:
             except UsageError as exc:
                 self.errors[provider] = str(exc)
 
-        self.scale = max(1.0, root.winfo_fpixels("1i") / 96)
+        saved_dock = self.settings.get("dock")
+        point = (saved_dock[1], saved_dock[2]) if saved_dock else (0, 0)
+        self.scale = monitor_scale(*point, root)
         render.SCALE = self.scale
         self.open = False
         self.drag = None
@@ -153,6 +214,9 @@ class App:
         self.menu.add_separator()
         self.alerts_var = tk.BooleanVar(value=self.alerts_enabled)
         self.menu.add_checkbutton(label="Avisos", variable=self.alerts_var, command=self.toggle_alerts)
+        self.menu.add_separator()
+        self.glass_var = tk.BooleanVar(value=self.glass_preference)
+        self.menu.add_checkbutton(label="Cristal", variable=self.glass_var, command=self.toggle_glass)
         self.menu.add_separator()
         self.menu.add_command(label="Actualizar", command=self.manual_refresh)
         self.menu.add_separator()
@@ -201,6 +265,17 @@ class App:
     def px(self, value):
         return round(value * self.scale)
 
+    def _update_monitor_scale(self, x, y):
+        scale = monitor_scale(x, y, self.root)
+        if math.isclose(scale, self.scale, rel_tol=0, abs_tol=0.001):
+            return False
+        center_x, center_y = self.rect[0] + self.rect[2] / 2, self.rect[1] + self.rect[3] / 2
+        self.scale = scale
+        render.SCALE = scale
+        width, height = self.size()
+        self.set_rect(center_x - width / 2, center_y - height / 2, width, height)
+        return True
+
     def compact_size(self, side=None):
         return render.scaled(render.compact_size(len(self.providers), vertical(side or self.dock["side"])))
 
@@ -241,6 +316,11 @@ class App:
     def set_rect(self, x, y, w, h, image=None):
         x, y, w, h = round(x), round(y), max(1, round(w)), max(1, round(h))
         if (x, y, w, h) != self.rect or not self.image:
+            if (x, y) != self.rect[:2] or (w, h) != self.rect[2:]:
+                self.glass_background = None
+                self.glass_signature = None
+                self.glass_surface = None
+                self.glass_surface_key = None
             if (w, h) == self.rect[2:]:
                 self.root.geometry(f"+{x}+{y}")
             else:
@@ -297,11 +377,27 @@ class App:
     def draw(self, image=None, size=None):
         if image is None:
             providers = self.view()
-            image = (render.expanded(providers, self.render_mode) if self.open else
-                     render.compact(providers, vertical(self.dock["side"]), self.render_mode))
+            if (self.glass_active and self.glass_background is not None
+                    and not self.animation and not self.drag):
+                image = render.content(providers, vertical(self.dock["side"]), self.open)
+            else:
+                image = (render.expanded(providers, self.render_mode) if self.open else
+                         render.compact(providers, vertical(self.dock["side"]), self.render_mode))
         if size and image.size != size:
             image = image.resize(size)
         if self.layered:
+            if self.glass_active and not self.animation and not self.drag:
+                if self.glass_background is None:
+                    self._schedule_glass(0)
+                    image = (render.expanded(self.view(), self.render_mode) if self.open else
+                             render.compact(self.view(), vertical(self.dock["side"]), self.render_mode))
+                else:
+                    try:
+                        image = self._compose_glass(image)
+                    except Exception:
+                        self._fail_glass()
+                        image = (render.expanded(self.view(), self.render_mode) if self.open else
+                                 render.compact(self.view(), vertical(self.dock["side"]), self.render_mode))
             try:
                 self.layered.render(image, self.rect[0], self.rect[1])
             except Exception:
@@ -336,10 +432,13 @@ class App:
             self.render_mode = "layered"
             self.canvas.pack_forget()
             self._bind_pointer(self.root)
+            if self.glass_preference:
+                self._enable_glass()
         except Exception:
             self._activate_colorkey()
 
     def _activate_colorkey(self):
+        self._disable_glass()
         if self.layered:
             try:
                 self.layered.close(reset_style=True)
@@ -354,6 +453,187 @@ class App:
         if not self.canvas.winfo_manager():
             self.canvas.pack(fill="both", expand=True)
         self._bind_pointer(self.canvas)
+
+    def _enable_glass(self):
+        if not self.layered or self.glass_failed:
+            return False
+        try:
+            hwnd = int(self.root.wm_frame(), 16)
+            self.glass_generation += 1
+            while True:
+                try:
+                    self.glass_events.get_nowait()
+                except queue.Empty:
+                    break
+            self.glass_active = True
+            self.capture_exclusion_fn(hwnd, True)
+            self.glass_background = None
+            self.glass_signature = None
+            self.glass_surface = None
+            self.glass_surface_key = None
+            self._schedule_glass(0)
+            return True
+        except Exception:
+            self._fail_glass()
+            return False
+
+    def _disable_glass(self):
+        if self.glass_timer is not None:
+            self.cancel(self.glass_timer)
+            self.glass_timer = None
+        was_active = self.glass_active
+        self.glass_active = False
+        self.glass_generation += 1
+        self.glass_background = None
+        self.glass_signature = None
+        self.glass_surface = None
+        self.glass_surface_key = None
+        if was_active:
+            try:
+                hwnd = int(self.root.wm_frame(), 16)
+                self.capture_exclusion_fn(hwnd, False)
+            except Exception:
+                pass
+
+    def _fail_glass(self):
+        self._disable_glass()
+        self.glass_failed = True
+        self.image = None
+
+    def _schedule_glass(self, delay=None):
+        if not self.glass_active or self.fullscreen_hidden or self.closed:
+            return
+        if self.glass_timer is not None:
+            self.cancel(self.glass_timer)
+        if delay is None:
+            delay = GLASS_AWAY_MS if self.away else GLASS_REFRESH_MS
+        self.glass_timer = self.later(delay, self._refresh_glass)
+
+    def _refresh_glass(self):
+        self.glass_timer = None
+        if not self.glass_active or self.fullscreen_hidden or self.closed:
+            return
+        try:
+            generation, rect, image, failed = self.glass_events.get_nowait()
+        except queue.Empty:
+            generation = rect = image = failed = None
+        if generation == self.glass_generation and rect == self.rect:
+            if failed:
+                self._fail_glass()
+                if self.layered:
+                    self.draw()
+                return
+            signature = image.resize((16, 16), Image.Resampling.BOX).tobytes()
+            if signature != self.glass_signature:
+                self.glass_background = image.convert("RGB")
+                self.glass_signature = signature
+                self.glass_surface = None
+                self.glass_surface_key = None
+                if not self.animation and not self.drag:
+                    self.draw()
+            else:
+                self._current_glass_opacity()
+                rendered_opacity = self.glass_surface_key[2] if self.glass_surface_key else None
+                if (self.glass_surface is None or rendered_opacity != round(self.glass_opacity, 3)) \
+                        and not self.animation and not self.drag:
+                    self.glass_surface = None
+                    self.draw()
+        if self.glass_worker is None or not self.glass_worker.is_alive():
+            self._start_glass_capture()
+        self._schedule_glass(GLASS_AWAY_MS if self.away else GLASS_REFRESH_MS)
+
+    def _start_glass_capture(self):
+        rect, generation = self.rect, self.glass_generation
+
+        def capture_background():
+            try:
+                image = self.capture_fn(rect)
+                if not isinstance(image, Image.Image) or image.size != rect[2:]:
+                    raise ValueError("La captura del fondo no es válida.")
+                result = (generation, rect, image.convert("RGB"), False)
+            except Exception:
+                result = (generation, rect, None, True)
+            if self.closed:
+                return
+            try:
+                self.glass_events.put_nowait(result)
+            except queue.Full:
+                try:
+                    self.glass_events.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.glass_events.put_nowait(result)
+                except queue.Full:
+                    pass
+
+        self.glass_worker = threading.Thread(target=capture_background, daemon=True)
+        self.glass_worker.start()
+
+    def _current_glass_opacity(self, now=None):
+        now = time.monotonic() if now is None else now
+        if self.glass_transition is None:
+            return self.glass_opacity
+        started, initial, target = self.glass_transition
+        progress = min(1, max(0, (now - started) * 1000 / GLASS_TRANSITION_MS))
+        eased = smooth(progress)
+        value = initial + (target - initial) * eased
+        if progress >= 1:
+            self.glass_transition = None
+        self.glass_opacity = value
+        return value
+
+    def _update_glass_target(self, pointer_inside, now=None):
+        now = time.monotonic() if now is None else now
+        if pointer_inside:
+            self.glass_pointer_out_since = None
+        elif self.glass_pointer_out_since is None:
+            self.glass_pointer_out_since = now
+        if self.open:
+            target = GLASS_OPACITY["expanded"]
+        elif pointer_inside or now - self.glass_pointer_out_since < GLASS_SETTLE_SECONDS:
+            target = GLASS_OPACITY["compact"]
+        else:
+            target = GLASS_OPACITY["rest"]
+        current = self._current_glass_opacity(now)
+        active_target = self.glass_transition[2] if self.glass_transition else current
+        if target != active_target:
+            self.glass_transition = (now, current, target)
+            self.glass_surface = None
+
+    def _compose_glass(self, content_image):
+        if self.glass_background is None:
+            raise ValueError("El fondo del cristal todavía no está disponible.")
+        opacity = self._current_glass_opacity()
+        bright_minimum = 0.35 if 0.2 <= opacity < 0.35 else 0.08
+        key = (self.glass_signature, self.rect[2:], round(opacity, 3), self.px(render.RADIUS))
+        if self.glass_surface is None or key != self.glass_surface_key:
+            tint = glass.Tint(opacity=opacity, bright_minimum=bright_minimum)
+            self.glass_surface = glass.compose(
+                self.glass_background, self.rect[2:], tint, self.px(render.RADIUS))
+            self.glass_surface_key = key
+        result = self.glass_surface.copy()
+        result.alpha_composite(content_image.convert("RGBA"))
+        return result
+
+    def toggle_glass(self):
+        enabled = bool(self.glass_var.get())
+        self.glass_preference = enabled
+        self.settings["glass"] = enabled
+        try:
+            save_settings(self.settings, self.data_dir)
+        except UsageError:
+            self.glass_preference = not enabled
+            self.glass_var.set(self.glass_preference)
+            self.settings["glass"] = self.glass_preference
+            return
+        if enabled:
+            self.glass_failed = False
+            if self._enable_glass():
+                self.draw()
+        else:
+            self._disable_glass()
+            self.draw()
 
     def redraw(self):
         if self.animation or self.drag:
@@ -475,6 +755,8 @@ class App:
         drag, self.drag = self.drag, None
         if not drag or not drag["moved"]:
             return
+        center_x, center_y = self.rect[0] + self.rect[2] / 2, self.rect[1] + self.rect[3] / 2
+        self._update_monitor_scale(center_x, center_y)
         x, y, w, h = self.rect
         if drag["attached"]:
             self.dock["along"] = self.corner_lock(self.dock["side"], self.dock["along"], (w, h), self.area())
@@ -490,6 +772,7 @@ class App:
         self.save_dock()
 
     def hover(self):
+        inside = False
         if not self.drag and not self.animation:
             px, py = self.root.winfo_pointerxy()
             x, y, w, h = self.rect
@@ -510,6 +793,7 @@ class App:
             else:
                 self.hover_since = None if not inside else self.hover_since
                 self.leave_since = None
+        self._update_glass_target(inside)
         self.later(HOVER_MS, self.hover)
 
     # Data -------------------------------------------------------------------
@@ -756,11 +1040,15 @@ class App:
         if fullscreen and not self.drag and not self.animation and not self.fullscreen_hidden:
             self.root.withdraw()
             self.fullscreen_hidden = True
+            if self.glass_timer is not None:
+                self.cancel(self.glass_timer)
+                self.glass_timer = None
         elif not fullscreen and self.fullscreen_hidden:
             self.root.deiconify()
             self.root.attributes("-topmost", True)
             self.fullscreen_hidden = False
             self.place()
+            self._schedule_glass(0)
 
     def close(self):
         if self.closed:
@@ -769,21 +1057,21 @@ class App:
         for handle in list(self.after_ids):
             self.root.after_cancel(handle)
         self.after_ids.clear()
+        self.glass_timer = None
+        self._disable_glass()
         self.client.close()
         self.claude_probe.close()
         if self.layered:
             self.layered.close()
         for worker in self.workers:
             worker.join(timeout=3)
+        if self.glass_worker:
+            self.glass_worker.join(timeout=3)
         self.root.destroy()
 
 
 def run(providers=None):
-    if os.name == "nt":
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except (AttributeError, OSError):
-            pass
+    set_per_monitor_dpi_awareness()
     root = tk.Tk()
     App(root, providers=providers)
     root.mainloop()

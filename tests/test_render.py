@@ -37,6 +37,13 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(stage.getpixel((0, 0))[3], 0)
         self.assertEqual(stage.getpixel((45, 45))[3], 255)
 
+    def test_content_layer_has_transparent_background_and_visible_ring(self):
+        image = render.content([self.provider("claude")], vertical=False)
+        self.assertEqual(image.mode, "RGBA")
+        self.assertEqual(image.size, (56, 56))
+        self.assertEqual(image.getpixel((0, 0))[3], 0)
+        self.assertGreater(image.getpixel((28, 28))[3], 0)
+
     def test_expanded_sizes_fit_one_and_two_providers(self):
         one = render.expanded_size([self.provider("claude")])
         two = render.expanded_size([self.provider("claude"), self.provider("codex")])

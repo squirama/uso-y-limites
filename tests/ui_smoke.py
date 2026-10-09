@@ -1,13 +1,17 @@
 from pathlib import Path
 import tempfile
+import threading
 import time
 import tkinter as tk
 import unittest
 from unittest.mock import patch
 
+from PIL import Image
+
+from usage_monitor import glass, render
 from usage_monitor.models import UsageSnapshot, WindowUsage
 from usage_monitor.fullscreen import window_covers_monitor
-from usage_monitor.storage import save_snapshot
+from usage_monitor.storage import load_settings, save_snapshot
 from usage_monitor.ui import App
 
 
@@ -17,6 +21,21 @@ class Event:
 
 
 class UiSmokeTests(unittest.TestCase):
+    def finish_glass_capture(self, app):
+        if app.glass_timer is not None:
+            app.cancel(app.glass_timer)
+            app.glass_timer = None
+        app._refresh_glass()
+        if app.glass_worker:
+            app.glass_worker.join(timeout=2)
+        if app.glass_timer is not None:
+            app.cancel(app.glass_timer)
+            app.glass_timer = None
+        app._refresh_glass()
+        if app.glass_timer is not None:
+            app.cancel(app.glass_timer)
+            app.glass_timer = None
+
     def make_app(self, folder, providers, idle_getter=None, notifier=None, fullscreen_getter=None):
         Path(folder, "settings.json").write_text('{"render_mode":"colorkey"}', encoding="utf-8")
         root = tk.Tk()
@@ -305,10 +324,16 @@ class UiSmokeTests(unittest.TestCase):
             Path(folder, "settings.json").write_text('{"render_mode":"auto"}', encoding="utf-8")
             root = tk.Tk()
             layered = FakeLayeredWindow(root)
+            exclusions = []
             app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
-                      layered_factory=lambda _root: layered)
+                      layered_factory=lambda _root: layered,
+                      capture_fn=lambda rect: Image.new("RGB", rect[2:], (70, 90, 120)),
+                      capture_exclusion_fn=lambda hwnd, excluded: exclusions.append((hwnd, excluded)))
             try:
+                self.finish_glass_capture(app)
                 self.assertEqual(app.render_mode, "layered")
+                self.assertTrue(app.glass_active)
+                self.assertEqual(exclusions[-1][1], True)
                 self.assertEqual(app.canvas.winfo_manager(), "")
                 self.assertEqual(layered.images[-1].mode, "RGBA")
                 app.open = True
@@ -318,6 +343,182 @@ class UiSmokeTests(unittest.TestCase):
             finally:
                 app.close()
             self.assertTrue(layered.closed)
+            self.assertEqual(exclusions[-1][1], False)
+
+    def test_glass_toggle_persists_and_updates_capture_exclusion(self):
+        class FakeLayeredWindow:
+            def __init__(self, _root):
+                self.images = []
+
+            def render(self, image, _x, _y):
+                self.images.append(image)
+
+            def close(self, reset_style=False):
+                pass
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = tk.Tk()
+            layered = FakeLayeredWindow(root)
+            exclusions = []
+            app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
+                      layered_factory=lambda _root: layered,
+                      capture_fn=lambda rect: Image.new("RGB", rect[2:], (80, 80, 80)),
+                      capture_exclusion_fn=lambda hwnd, enabled: exclusions.append(enabled))
+            try:
+                self.assertTrue(app.settings["glass"])
+                self.assertTrue(exclusions[-1])
+                app.glass_var.set(False)
+                app.toggle_glass()
+                self.assertFalse(app.settings["glass"])
+                self.assertFalse(app.glass_active)
+                self.assertFalse(exclusions[-1])
+                self.assertFalse(load_settings(Path(folder))["glass"])
+
+                app.glass_var.set(True)
+                app.toggle_glass()
+                self.assertTrue(app.glass_active)
+                self.assertTrue(exclusions[-1])
+            finally:
+                app.close()
+
+    def test_glass_capture_failure_falls_back_and_removes_exclusion(self):
+        class FakeLayeredWindow:
+            def __init__(self, _root):
+                self.images = []
+
+            def render(self, image, _x, _y):
+                self.images.append(image)
+
+            def close(self, reset_style=False):
+                pass
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = tk.Tk()
+            layered = FakeLayeredWindow(root)
+            exclusions = []
+
+            def fail_capture(_rect):
+                raise OSError("captura simulada")
+
+            app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
+                      layered_factory=lambda _root: layered, capture_fn=fail_capture,
+                      capture_exclusion_fn=lambda hwnd, enabled: exclusions.append(enabled))
+            try:
+                self.finish_glass_capture(app)
+                self.assertFalse(app.glass_active)
+                self.assertTrue(app.glass_failed)
+                self.assertEqual(exclusions, [True, False])
+                self.assertTrue(app.glass_var.get())
+                self.assertEqual(layered.images[-1].mode, "RGBA")
+            finally:
+                app.close()
+
+    def test_glass_refresh_skips_same_background_pauses_and_slows_when_away(self):
+        class FakeLayeredWindow:
+            def __init__(self, _root):
+                self.images = []
+
+            def render(self, image, _x, _y):
+                self.images.append(image)
+
+            def close(self, reset_style=False):
+                pass
+
+        background = {"color": (60, 70, 80)}
+        with tempfile.TemporaryDirectory() as folder:
+            root = tk.Tk()
+            layered = FakeLayeredWindow(root)
+            app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
+                      layered_factory=lambda _root: layered,
+                      capture_fn=lambda rect: Image.new("RGB", rect[2:], background["color"]),
+                      capture_exclusion_fn=lambda _hwnd, _enabled: None)
+            try:
+                app.layered = layered
+                app.render_mode = "layered"
+                app.glass_active = True
+                with patch("usage_monitor.ui.glass.compose", wraps=glass.compose) as compose:
+                    current = Image.new("RGB", app.rect[2:], background["color"])
+                    app.glass_background = current
+                    app.glass_signature = current.resize((16, 16), Image.Resampling.BOX).tobytes()
+                    app._compose_glass(render.content(app.view(), vertical=False))
+                    compose.reset_mock()
+                    with patch.object(app, "_start_glass_capture"), patch.object(
+                            app, "_schedule_glass") as schedule:
+                        app.glass_events.put((app.glass_generation, app.rect, current, False))
+                        app._refresh_glass()
+                        self.assertEqual(compose.call_count, 0)
+                        schedule.assert_called_once_with(100)
+
+                        changed = Image.new("RGB", app.rect[2:], (90, 100, 110))
+                        schedule.reset_mock()
+                        app.glass_events.put((app.glass_generation, app.rect, changed, False))
+                        app._refresh_glass()
+                        self.assertEqual(compose.call_count, 1)
+
+                        app.away = True
+                        schedule.reset_mock()
+                        app.glass_events.put((app.glass_generation, app.rect, changed, False))
+                        app._refresh_glass()
+                        schedule.assert_called_once_with(1000)
+
+                        app.fullscreen_hidden = True
+                        schedule.reset_mock()
+                        app._refresh_glass()
+                        self.assertEqual(compose.call_count, 1)
+                        schedule.assert_not_called()
+            finally:
+                app.close()
+
+    def test_glass_capture_runs_on_worker_thread(self):
+        threads = []
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude"])
+            try:
+                app.capture_fn = lambda rect: threads.append(threading.get_ident()) or Image.new(
+                    "RGB", rect[2:], (20, 30, 40))
+                app._start_glass_capture()
+                app.glass_worker.join(timeout=2)
+                self.assertEqual(len(threads), 1)
+                self.assertNotEqual(threads[0], threading.get_ident())
+                event = app.glass_events.get_nowait()
+                self.assertEqual(event[:2], (app.glass_generation, app.rect))
+                self.assertFalse(event[3])
+            finally:
+                app.close()
+
+    def test_glass_opacity_moves_between_compact_rest_and_expanded(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude"])
+            try:
+                app.glass_pointer_out_since = 0
+                app._update_glass_target(False, 2.9)
+                self.assertEqual(app.glass_opacity, 0.26)
+
+                app._update_glass_target(False, 3.1)
+                self.assertEqual(app.glass_transition[2], 0.08)
+
+                app.open = True
+                app._update_glass_target(True, 3.2)
+                self.assertEqual(app.glass_transition[2], 0.58)
+            finally:
+                app.close()
+
+    def test_dpi_scale_change_preserves_widget_center(self):
+        with tempfile.TemporaryDirectory() as folder, patch(
+                "usage_monitor.ui.monitor_scale", return_value=1.0):
+            root, app = self.make_app(folder, ["claude"])
+            try:
+                app.scale = 1.25
+                render.SCALE = 1.25
+                x, y, width, height = app.rect
+                center = (x + width / 2, y + height / 2)
+                self.assertTrue(app._update_monitor_scale(*center))
+                self.assertEqual(app.scale, 1.0)
+                self.assertEqual(render.SCALE, 1.0)
+                self.assertAlmostEqual(app.rect[0] + app.rect[2] / 2, center[0], delta=1)
+                self.assertAlmostEqual(app.rect[1] + app.rect[3] / 2, center[1], delta=1)
+            finally:
+                app.close()
 
     def test_layered_initialization_failure_falls_back_to_colorkey(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -352,7 +553,9 @@ class UiSmokeTests(unittest.TestCase):
             root = tk.Tk()
             layered = FailingLayeredWindow(root)
             app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
-                      layered_factory=lambda _root: layered)
+                      layered_factory=lambda _root: layered,
+                      capture_fn=lambda rect: Image.new("RGB", rect[2:], (50, 60, 70)),
+                      capture_exclusion_fn=lambda _hwnd, _enabled: None)
             try:
                 self.assertEqual(app.render_mode, "colorkey")
                 self.assertIsNone(app.layered)

@@ -140,7 +140,15 @@ def background(size, mode="colorkey"):
     return _finish(image, size)
 
 
-def _ring(draw, cx, cy, percent, color, text_color):
+def _draw_text(draw, point, value, typeface, color, anchor="la", shadow=False):
+    if shadow:
+        x, y = point
+        draw.text((x, y + SS), value, font=typeface, fill=(0, 0, 0, 120), anchor=anchor,
+                  stroke_width=SS, stroke_fill=(0, 0, 0, 80))
+    draw.text(point, value, font=typeface, fill=color, anchor=anchor)
+
+
+def _ring(draw, cx, cy, percent, color, text_color, shadow=False):
     s = SS
     r, width = 17 * s, 4 * s
     box = (cx - r, cy - r, cx + r, cy + r)
@@ -154,7 +162,7 @@ def _ring(draw, cx, cy, percent, color, text_color):
             px, py = cx + (r - width / 2) * math.cos(a), cy + (r - width / 2) * math.sin(a)
             draw.ellipse((px - width / 2, py - width / 2, px + width / 2, py + width / 2), fill=color)
     label = "–" if percent is None else f"{percent:.0f}"
-    draw.text((cx, cy), label, font=font(12 * s, "medium"), fill=text_color, anchor="mm")
+    _draw_text(draw, (cx, cy), label, font(12 * s, "medium"), text_color, "mm", shadow)
 
 
 def compact(providers, vertical, mode="colorkey"):
@@ -182,14 +190,14 @@ def _wrap(text, typeface, width):
     return lines + ([line] if line else [])
 
 
-def _layout(providers, draw=None):
+def _layout(providers, draw=None, shadow=False):
     """Lay out the expanded card; with draw=None only measures. Units are 1x pixels."""
     s, y = SS, PAD
     inner = EXPANDED_WIDTH - PAD * 2
 
     def text(x, top, value, size, color, weight="regular", anchor="la"):
         if draw:
-            draw.text((x * s, top * s), value, font=font(size * s, weight), fill=color, anchor=anchor)
+            _draw_text(draw, (x * s, top * s), value, font(size * s, weight), color, anchor, shadow)
 
     for index, provider in enumerate(providers):
         if index:
@@ -233,6 +241,24 @@ def expanded(providers, mode="colorkey"):
     size = expanded_size(providers)
     image, draw = _canvas(size, mode)
     _layout(providers, draw)
+    return _finish(image, size)
+
+
+def content(providers, vertical=False, expanded_view=False):
+    """Draw only the widget content on transparency for composition over a glass surface."""
+    size = expanded_size(providers) if expanded_view else compact_size(len(providers), vertical)
+    image = Image.new("RGBA", (size[0] * SS, size[1] * SS), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    if expanded_view:
+        _layout(providers, draw, shadow=True)
+    else:
+        step = 48 * SS
+        for index, provider in enumerate(providers):
+            offset = (index - (len(providers) - 1) / 2) * step
+            cx = size[0] * SS / 2 + (0 if vertical else offset)
+            cy = size[1] * SS / 2 + (offset if vertical else 0)
+            _ring(draw, cx, cy, provider.percent, level_color(provider.key, provider.percent),
+                  MUTED if provider.loading else TEXT, shadow=True)
     return _finish(image, size)
 
 

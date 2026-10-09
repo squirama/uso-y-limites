@@ -62,6 +62,19 @@ class StorageTests(unittest.TestCase):
             save_settings({"providers": ["claude"], "dock": None, "render_mode": "colorkey"}, directory)
             self.assertEqual(load_settings(directory)["render_mode"], "colorkey")
 
+    def test_glass_preference_defaults_on_validates_and_persists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            self.assertTrue(load_settings(directory)["glass"])
+            write_json(directory / "settings.json", {"glass": "yes"})
+            self.assertTrue(load_settings(directory)["glass"])
+            save_settings({"providers": ["codex"], "dock": None, "glass": False}, directory)
+            self.assertFalse(load_settings(directory)["glass"])
+
+    def test_save_rejects_invalid_glass_preference(self):
+        with tempfile.TemporaryDirectory() as folder, self.assertRaises(UsageError):
+            save_settings({"providers": ["codex"], "dock": None, "glass": 1}, Path(folder))
+
     def test_alert_history_roundtrip_and_seven_day_retention(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
