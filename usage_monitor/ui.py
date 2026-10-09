@@ -22,6 +22,7 @@ from .layered import LayeredWindow
 from .models import UsageError
 from .notify import send_notification
 from .schedule import ClaudeSchedule
+from .win32types import monitor_info
 from .storage import (DATA_DIR, load_settings, save_settings, load_snapshot, save_snapshot,
                      load_alerts, save_alerts)
 
@@ -47,24 +48,15 @@ LABELS = {"claude": {"5 horas": "Sesión", "7 días": "Semana"}, "codex": {}}
 def work_area(x, y, root):
     """Usable rectangle (no taskbar) of the monitor containing the point."""
     if os.name == "nt":
-        class RECT(ctypes.Structure):
-            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
-
-        class MONITORINFO(ctypes.Structure):
-            _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT),
-                        ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
-
         try:
             user32 = ctypes.windll.user32
             user32.MonitorFromPoint.restype = ctypes.c_void_p
-            monitor = user32.MonitorFromPoint(ctypes.wintypes.POINT(int(x), int(y)), 2)
-            info = MONITORINFO()
-            info.cbSize = ctypes.sizeof(MONITORINFO)
-            if user32.GetMonitorInfoW(ctypes.c_void_p(monitor), ctypes.byref(info)):
+            user32.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
+            info = monitor_info(user32.MonitorFromPoint(ctypes.wintypes.POINT(int(x), int(y)), 2))
+            if info is not None:
                 r = info.rcWork
                 return r.left, r.top, r.right, r.bottom
-        except (AttributeError, OSError):
+        except (AttributeError, OSError, ctypes.ArgumentError):
             pass
     return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
 

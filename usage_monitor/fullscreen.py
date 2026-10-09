@@ -4,6 +4,8 @@ import ctypes
 import ctypes.wintypes
 import os
 
+from .win32types import RECT, monitor_info
+
 
 SHELL_CLASSES = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
 
@@ -20,14 +22,6 @@ def window_covers_monitor(window_rect, monitor_rect, is_zoomed=False):
 def foreground_is_fullscreen(monitor_point):
     if os.name != "nt":
         return False
-
-    class RECT(ctypes.Structure):
-        _fields_ = [("left", ctypes.wintypes.LONG), ("top", ctypes.wintypes.LONG),
-                    ("right", ctypes.wintypes.LONG), ("bottom", ctypes.wintypes.LONG)]
-
-    class MONITORINFO(ctypes.Structure):
-        _fields_ = [("cbSize", ctypes.wintypes.DWORD), ("rcMonitor", RECT),
-                    ("rcWork", RECT), ("dwFlags", ctypes.wintypes.DWORD)]
 
     try:
         user32 = ctypes.windll.user32
@@ -69,15 +63,13 @@ def foreground_is_fullscreen(monitor_point):
         user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(RECT)]
         if not user32.GetWindowRect(foreground, ctypes.byref(rect)):
             return False
-        info = MONITORINFO()
-        info.cbSize = ctypes.sizeof(info)
-        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
-        if not user32.GetMonitorInfoW(ctypes.c_void_p(target_monitor), ctypes.byref(info)):
+        info = monitor_info(target_monitor)
+        if info is None:
             return False
         monitor = info.rcMonitor
         return window_covers_monitor(
             (rect.left, rect.top, rect.right, rect.bottom),
             (monitor.left, monitor.top, monitor.right, monitor.bottom),
         )
-    except (AttributeError, OSError, TypeError, ValueError, OverflowError):
+    except (AttributeError, OSError, TypeError, ValueError, OverflowError, ctypes.ArgumentError):
         return False
