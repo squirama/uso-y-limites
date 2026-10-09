@@ -72,6 +72,13 @@ porcentaje usado de la ventana de 5 horas. Un guion significa que todavía no ha
   al salir de pantalla completa. No se oculta mientras lo arrastras o anima.
 - El motivo si no ha podido leer los datos, por ejemplo una sesión caducada.
 
+## Transparencia del widget
+
+Por defecto, `render_mode` está en `auto`: el widget intenta usar alfa por píxel de Windows
+para suavizar los bordes y vuelve al modo de color clave si no puede inicializarlo. Para
+forzar el modo anterior, establece `"render_mode": "colorkey"` en
+`.runtime/settings.json`. El valor `"auto"` se restaura si el campo falta o no es válido.
+
 **Imán:**
 
 - Al soltarlo, se pega al borde más cercano de la pantalla en la que esté. Cerca de una
@@ -226,13 +233,17 @@ ausente, nunca como cero.
 | `Abrir.vbs`, `app.pyw` | Arranque sin consola. |
 | `instalar_inicio.ps1` | Activa o quita el arranque con Windows. |
 | `usage_monitor/ui.py` | Ventana flotante: imán, resistencia, rebote, ampliación, ratón, selección de servicios y ritmo de consultas. |
-| `usage_monitor/render.py` | Dibujo con Pillow, supersampleado a 3x para suavizar bordes. |
+| `usage_monitor/render.py` | Dibujo Pillow en alfa por píxel o modo de color clave, supersampleado a 3x. |
+| `usage_monitor/layered.py` | Ventana Win32 por capas, alfa premultiplicado y gestión de recursos GDI. |
+| `usage_monitor/fullscreen.py` | Detección de aplicaciones a pantalla completa en el monitor del widget. |
+| `usage_monitor/idle.py` | Medición de inactividad del usuario en Windows. |
+| `usage_monitor/notify.py` | Avisos de Windows sin pasar texto sin escapar a PowerShell. |
+| `usage_monitor/storage.py` | Lectura y escritura segura de `.runtime/`, preferencias y registro de avisos. |
 | `usage_monitor/claude_probe.py` | Consulta automática mínima a Claude Code. |
 | `usage_monitor/schedule.py` | Ritmo adaptativo de Claude (30 s, 5 min, 30 min). |
 | `usage_monitor/statusline.py`, `claude_statusline.py` | Receptor de la línea de estado de Claude Code. |
 | `usage_monitor/codex.py` | Consulta a Codex CLI por `app-server`. |
 | `usage_monitor/models.py` | Validación de datos. |
-| `usage_monitor/storage.py` | Lectura y escritura segura de `.runtime/`. |
 | `usage_monitor/__main__.py` | Arranque desde terminal y opción `--providers`. |
 
 ## Diagnóstico

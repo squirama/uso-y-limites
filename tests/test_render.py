@@ -20,6 +20,23 @@ class RenderTests(unittest.TestCase):
         for point in ((0, 0), (55, 0), (0, 55), (55, 55)):
             self.assertEqual(image.getpixel(point), key)
 
+    def test_layered_render_uses_real_pixel_alpha(self):
+        provider = self.provider("claude")
+        compact = render.compact([provider], False, "layered")
+        expanded = render.expanded([provider], "layered")
+        self.assertEqual(compact.mode, "RGBA")
+        self.assertEqual(compact.getpixel((0, 0))[3], 0)
+        self.assertEqual(compact.getpixel((28, 28))[3], 255)
+        self.assertEqual(expanded.mode, "RGBA")
+        self.assertEqual(expanded.getpixel((0, 0))[3], 0)
+
+    def test_layered_bounce_stage_keeps_transparent_padding(self):
+        image = render.compact([self.provider("codex")], False, "layered")
+        stage = render.on_stage(image, (90, 90), (15, 15, 60, 60), "layered")
+        self.assertEqual(stage.mode, "RGBA")
+        self.assertEqual(stage.getpixel((0, 0))[3], 0)
+        self.assertEqual(stage.getpixel((45, 45))[3], 255)
+
     def test_expanded_sizes_fit_one_and_two_providers(self):
         one = render.expanded_size([self.provider("claude")])
         two = render.expanded_size([self.provider("claude"), self.provider("codex")])

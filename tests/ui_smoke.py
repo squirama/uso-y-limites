@@ -17,6 +17,7 @@ class Event:
 
 class UiSmokeTests(unittest.TestCase):
     def make_app(self, folder, providers, idle_getter=None, notifier=None, fullscreen_getter=None):
+        Path(folder, "settings.json").write_text('{"render_mode":"colorkey"}', encoding="utf-8")
         root = tk.Tk()
         kwargs = {"idle_getter": idle_getter} if idle_getter else {}
         if notifier is not None:
@@ -271,6 +272,78 @@ class UiSmokeTests(unittest.TestCase):
         maximized_rect = (-8, -8, 1928, 1088)
         self.assertFalse(window_covers_monitor(maximized_rect, monitor, is_zoomed=True))
         self.assertTrue(window_covers_monitor((0, 0, 1920, 1080), monitor))
+
+    def test_layered_mode_renders_compact_and_expanded(self):
+        class FakeLayeredWindow:
+            def __init__(self, _root):
+                self.images = []
+                self.closed = False
+
+            def render(self, image, _x, _y):
+                self.images.append(image)
+
+            def close(self, reset_style=False):
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "settings.json").write_text('{"render_mode":"auto"}', encoding="utf-8")
+            root = tk.Tk()
+            layered = FakeLayeredWindow(root)
+            app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
+                      layered_factory=lambda _root: layered)
+            try:
+                self.assertEqual(app.render_mode, "layered")
+                self.assertEqual(app.canvas.winfo_manager(), "")
+                self.assertEqual(layered.images[-1].mode, "RGBA")
+                app.open = True
+                app.place()
+                self.assertEqual(layered.images[-1].mode, "RGBA")
+                self.assertGreater(layered.images[-1].height, 56)
+            finally:
+                app.close()
+            self.assertTrue(layered.closed)
+
+    def test_layered_initialization_failure_falls_back_to_colorkey(self):
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "settings.json").write_text('{"render_mode":"auto"}', encoding="utf-8")
+            root = tk.Tk()
+
+            def fail(_root):
+                raise OSError("native layered setup unavailable")
+
+            app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
+                      layered_factory=fail)
+            try:
+                self.assertEqual(app.render_mode, "colorkey")
+                self.assertEqual(app.canvas.winfo_manager(), "pack")
+                self.assertIsNone(app.layered)
+            finally:
+                app.close()
+
+    def test_layered_render_failure_releases_renderer_and_falls_back(self):
+        class FailingLayeredWindow:
+            def __init__(self, _root):
+                self.reset_style = None
+
+            def render(self, _image, _x, _y):
+                raise OSError("UpdateLayeredWindow failed")
+
+            def close(self, reset_style=False):
+                self.reset_style = reset_style
+
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "settings.json").write_text('{"render_mode":"auto"}', encoding="utf-8")
+            root = tk.Tk()
+            layered = FailingLayeredWindow(root)
+            app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
+                      layered_factory=lambda _root: layered)
+            try:
+                self.assertEqual(app.render_mode, "colorkey")
+                self.assertIsNone(app.layered)
+                self.assertEqual(app.canvas.winfo_manager(), "pack")
+                self.assertTrue(layered.reset_style)
+            finally:
+                app.close()
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,8 +58,12 @@ def load_settings(data_dir=DATA_DIR):
     valid = (isinstance(dock, list) and len(dock) == 3 and dock[0] in {"left", "right", "top", "bottom"} and
              all(isinstance(v, int) and not isinstance(v, bool) and abs(v) < 100000 for v in dock[1:]))
     alerts = raw.get("alerts", True)
+    render_mode = raw.get("render_mode", "auto")
+    if not isinstance(render_mode, str) or render_mode not in {"auto", "colorkey"}:
+        render_mode = "auto"
     return {"providers": selected, "dock": dock if valid else None,
-            "alerts": alerts if isinstance(alerts, bool) else True}
+            "alerts": alerts if isinstance(alerts, bool) else True,
+            "render_mode": render_mode}
 
 
 def save_settings(settings, data_dir=DATA_DIR):
@@ -69,8 +73,12 @@ def save_settings(settings, data_dir=DATA_DIR):
     alerts = settings.get("alerts", True)
     if not isinstance(alerts, bool):
         raise UsageError("La preferencia de avisos no es válida.")
+    render_mode = settings.get("render_mode", "auto")
+    if not isinstance(render_mode, str) or render_mode not in {"auto", "colorkey"}:
+        raise UsageError("El modo de renderizado no es válido.")
     write_json(data_dir / "settings.json", {
         "providers": providers, "dock": settings.get("dock"), "alerts": alerts,
+        "render_mode": render_mode,
     })
 
 

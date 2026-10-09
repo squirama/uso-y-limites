@@ -18,6 +18,7 @@ from .claude_probe import ClaudeProbe
 from .codex import CodexClient
 from .fullscreen import foreground_is_fullscreen
 from .idle import idle_seconds
+from .layered import LayeredWindow
 from .models import UsageError
 from .notify import send_notification
 from .schedule import ClaudeSchedule
@@ -75,7 +76,8 @@ def smooth(t):
 
 class App:
     def __init__(self, root, data_dir=DATA_DIR, network=True, providers=None, idle_getter=idle_seconds,
-                 notifier=send_notification, fullscreen_getter=foreground_is_fullscreen):
+                 notifier=send_notification, fullscreen_getter=foreground_is_fullscreen,
+                 layered_factory=LayeredWindow):
         self.root = root
         self.data_dir = Path(data_dir)
         self.network = network
@@ -107,7 +109,11 @@ class App:
         try:
             self.settings = load_settings(self.data_dir)
         except UsageError:
-            self.settings = {"providers": ["claude", "codex"], "dock": None, "alerts": True}
+            self.settings = {"providers": ["claude", "codex"], "dock": None,
+                             "alerts": True, "render_mode": "auto"}
+        self.render_mode_preference = self.settings.get("render_mode", "auto")
+        self.render_mode = "colorkey"
+        self.layered = None
         self.alerts_enabled = self.settings.get("alerts", True)
         self.provider_override = providers is not None
         selected = providers if self.provider_override else self.settings.get("providers", ["claude", "codex"])
@@ -133,13 +139,11 @@ class App:
         root.overrideredirect(True)
         root.attributes("-topmost", True)
         root.configure(background=render.KEY)
-        try:
-            root.attributes("-transparentcolor", render.KEY)
-        except tk.TclError:
-            pass
         self.canvas = tk.Canvas(root, background=render.KEY, highlightthickness=0, borderwidth=0, cursor="fleur")
         self.canvas.pack(fill="both", expand=True)
         self.picture = self.canvas.create_image(0, 0, anchor="nw")
+        self.input_widget = None
+        self._bind_pointer(self.canvas)
         self.menu = tk.Menu(root, tearoff=0)
         for key, label in (("claude", "Claude"), ("codex", "Codex")):
             variable = tk.BooleanVar(value=key in self.providers)
@@ -153,13 +157,11 @@ class App:
         self.menu.add_command(label="Actualizar", command=self.manual_refresh)
         self.menu.add_separator()
         self.menu.add_command(label="Cerrar", command=self.close)
-        self.canvas.bind("<ButtonPress-1>", self.on_press)
-        self.canvas.bind("<B1-Motion>", self.on_motion)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        self.canvas.bind("<Double-Button-1>", lambda _e: self.manual_refresh())
-        self.canvas.bind("<Button-3>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
-
         self.restore_dock()
+        x, y, width, height = self.rect
+        root.geometry(f"{width}x{height}+{x}+{y}")
+        root.update_idletasks()
+        self._enable_layered(layered_factory)
         self.place()
         if network:
             for provider in self.providers:
@@ -295,11 +297,63 @@ class App:
     def draw(self, image=None, size=None):
         if image is None:
             providers = self.view()
-            image = render.expanded(providers) if self.open else render.compact(providers, vertical(self.dock["side"]))
+            image = (render.expanded(providers, self.render_mode) if self.open else
+                     render.compact(providers, vertical(self.dock["side"]), self.render_mode))
         if size and image.size != size:
             image = image.resize(size)
+        if self.layered:
+            try:
+                self.layered.render(image, self.rect[0], self.rect[1])
+            except Exception:
+                self._activate_colorkey()
+                self.image = None
+                self.draw()
+                return
+            self.image = image
+            return
         self.image = ImageTk.PhotoImage(image, master=self.root)
         self.canvas.itemconfigure(self.picture, image=self.image)
+
+    def _bind_pointer(self, widget):
+        sequences = ("<ButtonPress-1>", "<B1-Motion>", "<ButtonRelease-1>",
+                     "<Double-Button-1>", "<Button-3>")
+        if self.input_widget:
+            for sequence in sequences:
+                self.input_widget.unbind(sequence)
+        widget.bind("<ButtonPress-1>", self.on_press)
+        widget.bind("<B1-Motion>", self.on_motion)
+        widget.bind("<ButtonRelease-1>", self.on_release)
+        widget.bind("<Double-Button-1>", lambda _e: self.manual_refresh())
+        widget.bind("<Button-3>", lambda event: self.menu.tk_popup(event.x_root, event.y_root))
+        self.input_widget = widget
+
+    def _enable_layered(self, layered_factory):
+        if self.render_mode_preference == "colorkey":
+            self._activate_colorkey()
+            return
+        try:
+            self.layered = layered_factory(self.root)
+            self.render_mode = "layered"
+            self.canvas.pack_forget()
+            self._bind_pointer(self.root)
+        except Exception:
+            self._activate_colorkey()
+
+    def _activate_colorkey(self):
+        if self.layered:
+            try:
+                self.layered.close(reset_style=True)
+            except Exception:
+                pass
+            self.layered = None
+        self.render_mode = "colorkey"
+        try:
+            self.root.attributes("-transparentcolor", render.KEY)
+        except tk.TclError:
+            pass
+        if not self.canvas.winfo_manager():
+            self.canvas.pack(fill="both", expand=True)
+        self._bind_pointer(self.canvas)
 
     def redraw(self):
         if self.animation or self.drag:
@@ -336,7 +390,7 @@ class App:
         """Accelerate from the current rectangle into the docked one, then bounce."""
         sx, sy, sw, sh = self.rect
         tx, ty, tw, th = self.anchored(self.dock["side"], self.dock["along"], self.compact_size())
-        image = render.compact(self.view(), vertical(self.dock["side"]))
+        image = render.compact(self.view(), vertical(self.dock["side"]), self.render_mode)
         # Keep the window size fixed while flying: resizing a layered window leaves square trails.
         sx, sy = sx + (sw - tw) / 2, sy + (sh - th) / 2
 
@@ -352,7 +406,7 @@ class App:
             return
         side = self.dock["side"]
         x, y, w, h = self.anchored(side, self.dock["along"], self.compact_size())
-        image = render.compact(self.view(), vertical(side))
+        image = render.compact(self.view(), vertical(side), self.render_mode)
         s = strength
         # (time, perpendicular scale, parallel scale, offset from the wall)
         keys = [(0, 1 - .32 * s, 1 + .16 * s, 0), (.35, 1 + .1 * s, 1 - .06 * s, 10 * s),
@@ -375,7 +429,7 @@ class App:
             else:
                 ny = pad + offset if side == "top" else pad + h - new_perp - offset
                 box = (pad + (w - new_par) / 2, ny, new_par, new_perp)
-            return (*stage, render.on_stage(image, stage[2:], box))
+            return (*stage, render.on_stage(image, stage[2:], box, self.render_mode))
         self.animate(frame, 620, self.place)
 
     # Pointer ----------------------------------------------------------------
@@ -715,6 +769,8 @@ class App:
         self.after_ids.clear()
         self.client.close()
         self.claude_probe.close()
+        if self.layered:
+            self.layered.close()
         for worker in self.workers:
             worker.join(timeout=3)
         self.root.destroy()

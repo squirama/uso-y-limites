@@ -51,6 +51,17 @@ class StorageTests(unittest.TestCase):
             save_settings({"providers": ["codex"], "dock": None, "alerts": False}, directory)
             self.assertFalse(load_settings(directory)["alerts"])
 
+    def test_render_mode_defaults_auto_validates_and_persists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            self.assertEqual(load_settings(directory)["render_mode"], "auto")
+            write_json(directory / "settings.json", {"render_mode": "unknown"})
+            self.assertEqual(load_settings(directory)["render_mode"], "auto")
+            write_json(directory / "settings.json", {"render_mode": []})
+            self.assertEqual(load_settings(directory)["render_mode"], "auto")
+            save_settings({"providers": ["claude"], "dock": None, "render_mode": "colorkey"}, directory)
+            self.assertEqual(load_settings(directory)["render_mode"], "colorkey")
+
     def test_alert_history_roundtrip_and_seven_day_retention(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)

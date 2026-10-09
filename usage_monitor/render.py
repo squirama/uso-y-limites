@@ -102,8 +102,13 @@ def level_color(provider_key, percent):
     return COLORS[provider_key]
 
 
-def _canvas(size):
-    image = Image.new("RGB", (size[0] * SS, size[1] * SS), KEY)
+def _canvas(size, mode="colorkey"):
+    if mode == "layered":
+        image = Image.new("RGBA", (size[0] * SS, size[1] * SS), (0, 0, 0, 0))
+    elif mode == "colorkey":
+        image = Image.new("RGB", (size[0] * SS, size[1] * SS), KEY)
+    else:
+        raise ValueError("Modo de renderizado no válido.")
     draw = ImageDraw.Draw(image)
     radius = min(size) // 2 if size == (SINGLE_COMPACT, SINGLE_COMPACT) else min(RADIUS, min(size) // 2)
     draw.rounded_rectangle((0, 0, size[0] * SS - 1, size[1] * SS - 1), radius * SS, fill=BG)
@@ -130,8 +135,8 @@ def _finish(image, size):
     return image.resize(scaled(size), Image.BOX)
 
 
-def background(size):
-    image, _ = _canvas(size)
+def background(size, mode="colorkey"):
+    image, _ = _canvas(size, mode)
     return _finish(image, size)
 
 
@@ -152,9 +157,9 @@ def _ring(draw, cx, cy, percent, color, text_color):
     draw.text((cx, cy), label, font=font(12 * s, "medium"), fill=text_color, anchor="mm")
 
 
-def compact(providers, vertical):
+def compact(providers, vertical, mode="colorkey"):
     size = compact_size(len(providers), vertical)
-    image, draw = _canvas(size)
+    image, draw = _canvas(size, mode)
     step = 48 * SS
     for index, provider in enumerate(providers):
         offset = (index - (len(providers) - 1) / 2) * step
@@ -224,16 +229,25 @@ def expanded_size(providers):
     return EXPANDED_WIDTH, _layout(providers)
 
 
-def expanded(providers):
+def expanded(providers, mode="colorkey"):
     size = expanded_size(providers)
-    image, draw = _canvas(size)
+    image, draw = _canvas(size, mode)
     _layout(providers, draw)
     return _finish(image, size)
 
 
-def on_stage(image, stage_size, box):
+def on_stage(image, stage_size, box, mode="colorkey"):
     """Paste a deformed copy of the widget on a transparent stage of fixed size."""
-    stage = Image.new("RGB", stage_size, KEY)
+    if mode == "layered":
+        stage = Image.new("RGBA", stage_size, (0, 0, 0, 0))
+    elif mode == "colorkey":
+        stage = Image.new("RGB", stage_size, KEY)
+    else:
+        raise ValueError("Modo de renderizado no válido.")
     x, y, w, h = (round(v) for v in box)
-    stage.paste(image.resize((max(1, w), max(1, h)), Image.BILINEAR), (x, y))
+    resized = image.resize((max(1, w), max(1, h)), Image.BILINEAR)
+    if mode == "layered":
+        stage.alpha_composite(resized.convert("RGBA"), (x, y))
+    else:
+        stage.paste(resized, (x, y))
     return stage
