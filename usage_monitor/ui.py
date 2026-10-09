@@ -16,6 +16,7 @@ from PIL import ImageTk
 from . import render
 from .claude_probe import ClaudeProbe
 from .codex import CodexClient
+from .fullscreen import foreground_is_fullscreen
 from .idle import idle_seconds
 from .models import UsageError
 from .notify import send_notification
@@ -74,13 +75,15 @@ def smooth(t):
 
 class App:
     def __init__(self, root, data_dir=DATA_DIR, network=True, providers=None, idle_getter=idle_seconds,
-                 notifier=send_notification):
+                 notifier=send_notification, fullscreen_getter=foreground_is_fullscreen):
         self.root = root
         self.data_dir = Path(data_dir)
         self.network = network
         self.idle_getter = idle_getter
         self.away = False
         self.notifier = notifier
+        self.fullscreen_getter = fullscreen_getter
+        self.fullscreen_hidden = False
         self.events = queue.Queue(maxsize=64)
         self.snapshots = {"claude": None, "codex": None}
         self.errors = {"claude": "", "codex": ""}
@@ -678,6 +681,7 @@ class App:
     def tick(self):
         # Expanded text shows ages in seconds; the compact view only needs occasional repaint.
         self.update_idle_state()
+        self.update_fullscreen_state()
         if self.open:
             self.redraw()
         self.ticks = getattr(self, "ticks", 0) + 1
@@ -686,6 +690,21 @@ class App:
             if not self.open:
                 self.redraw()
         self.later(CLOCK_MS, self.tick)
+
+    def update_fullscreen_state(self):
+        x, y, width, height = self.rect
+        try:
+            fullscreen = bool(self.fullscreen_getter((x + width // 2, y + height // 2)))
+        except Exception:
+            fullscreen = False
+        if fullscreen and not self.drag and not self.animation and not self.fullscreen_hidden:
+            self.root.withdraw()
+            self.fullscreen_hidden = True
+        elif not fullscreen and self.fullscreen_hidden:
+            self.root.deiconify()
+            self.root.attributes("-topmost", True)
+            self.fullscreen_hidden = False
+            self.place()
 
     def close(self):
         if self.closed:

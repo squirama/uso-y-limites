@@ -15,11 +15,13 @@ class Event:
 
 
 class UiSmokeTests(unittest.TestCase):
-    def make_app(self, folder, providers, idle_getter=None, notifier=None):
+    def make_app(self, folder, providers, idle_getter=None, notifier=None, fullscreen_getter=None):
         root = tk.Tk()
         kwargs = {"idle_getter": idle_getter} if idle_getter else {}
         if notifier is not None:
             kwargs["notifier"] = notifier
+        if fullscreen_getter is not None:
+            kwargs["fullscreen_getter"] = fullscreen_getter
         return root, App(root, data_dir=Path(folder), network=False, providers=providers, **kwargs)
 
     def test_provider_selection_view_size_persistence_and_docking(self):
@@ -200,6 +202,66 @@ class UiSmokeTests(unittest.TestCase):
                 app.check_alerts("claude", disabled_window)
                 self.assertEqual(len(notices), 2)
                 self.assertFalse(app.settings["alerts"])
+            finally:
+                app.close()
+
+    def test_fullscreen_hides_and_restores_widget(self):
+        state = {"fullscreen": True}
+        points = []
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(
+                folder, ["claude"],
+                fullscreen_getter=lambda point: points.append(point) or state["fullscreen"],
+            )
+            try:
+                with patch.object(root, "withdraw") as withdraw, patch.object(
+                        root, "deiconify") as deiconify, patch.object(
+                        root, "attributes") as attributes, patch.object(app, "place") as place:
+                    app.update_fullscreen_state()
+                    self.assertTrue(app.fullscreen_hidden)
+                    withdraw.assert_called_once_with()
+                    self.assertEqual(points[-1], (app.rect[0] + app.rect[2] // 2,
+                                                   app.rect[1] + app.rect[3] // 2))
+
+                    state["fullscreen"] = False
+                    app.update_fullscreen_state()
+                    self.assertFalse(app.fullscreen_hidden)
+                    deiconify.assert_called_once_with()
+                    attributes.assert_called_once_with("-topmost", True)
+                    place.assert_called_once_with()
+            finally:
+                app.close()
+
+    def test_fullscreen_does_not_hide_during_drag_or_animation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude"], fullscreen_getter=lambda _point: True)
+            try:
+                with patch.object(root, "withdraw") as withdraw:
+                    app.drag = {"attached": True}
+                    app.update_fullscreen_state()
+                    app.drag = None
+                    app.animation = object()
+                    app.update_fullscreen_state()
+                    self.assertFalse(app.fullscreen_hidden)
+                    withdraw.assert_not_called()
+                    app.animation = None
+                    app.update_fullscreen_state()
+                    self.assertTrue(app.fullscreen_hidden)
+                    withdraw.assert_called_once_with()
+            finally:
+                app.close()
+
+    def test_fullscreen_on_another_monitor_does_not_hide_widget(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(
+                folder, ["claude"], fullscreen_getter=lambda point: point[0] < 1920,
+            )
+            try:
+                app.rect = (2400, 100, 100, 100)
+                with patch.object(root, "withdraw") as withdraw:
+                    app.update_fullscreen_state()
+                    self.assertFalse(app.fullscreen_hidden)
+                    withdraw.assert_not_called()
             finally:
                 app.close()
 

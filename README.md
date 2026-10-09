@@ -68,6 +68,8 @@ porcentaje usado de la ventana de 5 horas. Un guion significa que todavía no ha
 - El anillo y cada barra cambian a ámbar desde el 80 % y a rojo desde el 95 %.
 - «Avisos» en el menú muestra una notificación de Windows una vez por cada sesión de
   cinco horas al llegar al 90 %. Puedes desactivarlos desde el mismo menú.
+- Si otra ventana ocupa toda la pantalla del monitor del widget, este se oculta y vuelve
+  al salir de pantalla completa. No se oculta mientras lo arrastras o anima.
 - El motivo si no ha podido leer los datos, por ejemplo una sesión caducada.
 
 **Imán:**
