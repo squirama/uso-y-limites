@@ -37,6 +37,7 @@ IDLE_THRESHOLD_SECONDS, RESUME_THRESHOLD_SECONDS = 300, 5
 AWAY_CLAUDE_SECONDS, AWAY_CODEX_MS = 1800, 300000
 GLASS_SETTLE_SECONDS, GLASS_TRANSITION_MS = 3, 300
 GLASS_OPACITY = {"compact": 0.26, "rest": 0.08, "expanded": 0.58}
+GLASS_BRIGHT_MINIMUM = {"compact": 0.35, "rest": 0.18, "expanded": 0.62}
 LABELS = {"claude": {"5 horas": "Sesión", "7 días": "Semana"}, "codex": {}}
 
 
@@ -605,12 +606,21 @@ class App:
         if self.glass_background is None:
             raise ValueError("El fondo del cristal todavía no está disponible.")
         opacity = self._current_glass_opacity()
-        bright_minimum = 0.35 if 0.2 <= opacity < 0.35 else 0.08
-        key = (self.glass_signature, self.rect[2:], round(opacity, 3), self.px(render.RADIUS))
+        # Minimum veil over light backgrounds, per state: rest, compact, expanded.
+        if self.open:
+            bright_minimum = GLASS_BRIGHT_MINIMUM["expanded"]
+        elif opacity >= 0.2:
+            bright_minimum = GLASS_BRIGHT_MINIMUM["compact"]
+        else:
+            bright_minimum = GLASS_BRIGHT_MINIMUM["rest"]
+        logical = (render.expanded_size(self.view()) if self.open else
+                   render.compact_size(len(self.providers), vertical(self.dock["side"])))
+        radius = self.px(render.shape_radius(logical))
+        key = (self.glass_signature, self.rect[2:], round(opacity, 3), radius, bright_minimum, self.scale)
         if self.glass_surface is None or key != self.glass_surface_key:
             tint = glass.Tint(opacity=opacity, bright_minimum=bright_minimum)
             self.glass_surface = glass.compose(
-                self.glass_background, self.rect[2:], tint, self.px(render.RADIUS))
+                self.glass_background, self.rect[2:], tint, radius, self.scale)
             self.glass_surface_key = key
         result = self.glass_surface.copy()
         result.alpha_composite(content_image.convert("RGBA"))

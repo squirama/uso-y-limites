@@ -15,6 +15,9 @@ BG = "#1c1c1e"
 TRACK = "#3a3a3c"
 TEXT = "#f2f2f7"
 MUTED = "#a1a1a6"
+# On glass the background can be light, so secondary text and tracks are translucent white.
+GLASS_MUTED = (255, 255, 255, 184)
+GLASS_TRACK = (255, 255, 255, 64)
 ERROR = "#f09595"
 COLORS = {"claude": "#F0997B", "codex": "#5DCAA5"}
 WARNING = "#EF9F27"
@@ -110,9 +113,15 @@ def _canvas(size, mode="colorkey"):
     else:
         raise ValueError("Modo de renderizado no válido.")
     draw = ImageDraw.Draw(image)
-    radius = min(size) // 2 if size == (SINGLE_COMPACT, SINGLE_COMPACT) else min(RADIUS, min(size) // 2)
-    draw.rounded_rectangle((0, 0, size[0] * SS - 1, size[1] * SS - 1), radius * SS, fill=BG)
+    draw.rounded_rectangle((0, 0, size[0] * SS - 1, size[1] * SS - 1), shape_radius(size) * SS, fill=BG)
     return image, draw
+
+
+def shape_radius(size):
+    """Corner radius in logical pixels: a circle for one service, rounded corners otherwise."""
+    if tuple(size) == (SINGLE_COMPACT, SINGLE_COMPACT):
+        return min(size) // 2
+    return min(RADIUS, min(size) // 2)
 
 
 def compact_size(count, vertical):
@@ -148,11 +157,11 @@ def _draw_text(draw, point, value, typeface, color, anchor="la", shadow=False):
     draw.text(point, value, font=typeface, fill=color, anchor=anchor)
 
 
-def _ring(draw, cx, cy, percent, color, text_color, shadow=False):
+def _ring(draw, cx, cy, percent, color, text_color, shadow=False, track=TRACK):
     s = SS
     r, width = 17 * s, 4 * s
     box = (cx - r, cy - r, cx + r, cy + r)
-    draw.ellipse(box, outline=TRACK, width=width)
+    draw.ellipse(box, outline=track, width=width)
     if percent:
         end = -90 + 360 * min(percent, 100) / 100
         draw.arc(box, -90, end, fill=color, width=width)
@@ -190,7 +199,7 @@ def _wrap(text, typeface, width):
     return lines + ([line] if line else [])
 
 
-def _layout(providers, draw=None, shadow=False):
+def _layout(providers, draw=None, shadow=False, muted=MUTED, track=TRACK):
     """Lay out the expanded card; with draw=None only measures. Units are 1x pixels."""
     s, y = SS, PAD
     inner = EXPANDED_WIDTH - PAD * 2
@@ -202,14 +211,14 @@ def _layout(providers, draw=None, shadow=False):
     for index, provider in enumerate(providers):
         if index:
             if draw:
-                draw.rectangle((PAD * s, (y + 2) * s, (EXPANDED_WIDTH - PAD) * s, (y + 2) * s + 1), fill=TRACK)
+                draw.rectangle((PAD * s, (y + 2) * s, (EXPANDED_WIDTH - PAD) * s, (y + 2) * s + 1), fill=track)
             y += 12
         text(PAD, y, NAMES[provider.key], 13, TEXT, "medium")
-        text(EXPANDED_WIDTH - PAD, y + 2, "Actualizando…" if provider.loading else provider.age, 11, MUTED, anchor="ra")
+        text(EXPANDED_WIDTH - PAD, y + 2, "Actualizando…" if provider.loading else provider.age, 11, muted, anchor="ra")
         y += 20
         if provider.message:
             for line in _wrap(provider.message, font(11), inner):
-                text(PAD, y, line, 11, ERROR if not provider.rows else MUTED)
+                text(PAD, y, line, 11, ERROR if not provider.rows else muted)
                 y += 15
             y += 4
         for row_index, row in enumerate(provider.rows):
@@ -220,14 +229,14 @@ def _layout(providers, draw=None, shadow=False):
             y += 19
             if draw:
                 left, right = PAD * s, (EXPANDED_WIDTH - PAD) * s
-                draw.rounded_rectangle((left, y * s, right, (y + 4) * s), 2 * s, fill=TRACK)
+                draw.rounded_rectangle((left, y * s, right, (y + 4) * s), 2 * s, fill=track)
                 filled = left + (right - left) * min(row.percent, 100) / 100
                 if filled - left >= 4 * s:
                     draw.rounded_rectangle((left, y * s, filled, (y + 4) * s), 2 * s,
                                            fill=level_color(provider.key, row.percent))
             y += 8
-            text(PAD, y, row.reset, 11, MUTED)
-            text(EXPANDED_WIDTH - PAD, y, row.remaining, 11, MUTED, anchor="ra")
+            text(PAD, y, row.reset, 11, muted)
+            text(EXPANDED_WIDTH - PAD, y, row.remaining, 11, muted, anchor="ra")
             y += 15
         y += 6
     return y + PAD - 6
@@ -250,7 +259,7 @@ def content(providers, vertical=False, expanded_view=False):
     image = Image.new("RGBA", (size[0] * SS, size[1] * SS), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     if expanded_view:
-        _layout(providers, draw, shadow=True)
+        _layout(providers, draw, shadow=True, muted=GLASS_MUTED, track=GLASS_TRACK)
     else:
         step = 48 * SS
         for index, provider in enumerate(providers):
@@ -258,7 +267,7 @@ def content(providers, vertical=False, expanded_view=False):
             cx = size[0] * SS / 2 + (0 if vertical else offset)
             cy = size[1] * SS / 2 + (offset if vertical else 0)
             _ring(draw, cx, cy, provider.percent, level_color(provider.key, provider.percent),
-                  MUTED if provider.loading else TEXT, shadow=True)
+                  GLASS_MUTED if provider.loading else TEXT, shadow=True, track=GLASS_TRACK)
     return _finish(image, size)
 
 

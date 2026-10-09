@@ -58,5 +58,10 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(render.level_color("claude", 95), render.CRITICAL)
 
 
+    def test_shape_radius_matches_drawn_shape(self):
+        self.assertEqual(render.shape_radius((56, 56)), 28)
+        self.assertEqual(render.shape_radius((124, 56)), 22)
+        self.assertEqual(render.shape_radius((236, 300)), 22)
+
 if __name__ == "__main__":
     unittest.main()

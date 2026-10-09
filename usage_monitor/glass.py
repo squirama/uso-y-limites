@@ -1,6 +1,7 @@
 """Pure image operations for composing the widget's liquid-glass surface."""
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 
 import numpy as np
@@ -34,6 +35,7 @@ def effective_opacity(background, tint):
     return tint.opacity
 
 
+@lru_cache(maxsize=32)
 def _rounded_mask(size, radius):
     width, height = size
     scale = SUPERSAMPLE
@@ -45,9 +47,9 @@ def _rounded_mask(size, radius):
     return mask.resize(size, Image.Resampling.BOX)
 
 
-def _refraction(image, radius):
-    pixels = np.asarray(image.convert("RGB"), dtype=np.uint8)
-    height, width = pixels.shape[:2]
+@lru_cache(maxsize=32)
+def _refraction_indices(width, height, radius, scale):
+    """Source row and column for each pixel; depends only on the shape, so it is cached."""
     x, y = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
     r = min(max(0, radius), width / 2, height / 2)
     left, right, top, bottom = 0.0, width - 1.0, 0.0, height - 1.0
@@ -66,24 +68,31 @@ def _refraction(image, radius):
     np.divide(normal_x, normal_length, out=normal_x, where=normal_length > 0)
     np.divide(normal_y, normal_length, out=normal_y, where=normal_length > 0)
 
-    scale = radius / 22 if radius > 0 else 1
     band = REFRACTION_WIDTH * scale
     amount = REFRACTION_SHIFT * scale * np.square(np.maximum(0, 1 - edge_distance / max(1, band)))
     amount[(edge_distance < 0) | (edge_distance >= band)] = 0
     source_x = np.clip(np.rint(x - normal_x * amount), 0, width - 1).astype(np.intp)
     source_y = np.clip(np.rint(y - normal_y * amount), 0, height - 1).astype(np.intp)
+    return source_y, source_x
+
+
+def _refraction(image, radius, scale=1.0):
+    pixels = np.asarray(image.convert("RGB"), dtype=np.uint8)
+    height, width = pixels.shape[:2]
+    source_y, source_x = _refraction_indices(width, height, round(float(radius), 2), round(float(scale), 3))
     return Image.fromarray(pixels[source_y, source_x], "RGB")
 
 
-def _blur_and_saturate(background):
+def _blur_and_saturate(background, scale=1.0):
     width, height = background.size
     half = (max(1, width // 2), max(1, height // 2))
     reduced = background.resize(half, Image.Resampling.BOX)
-    blurred = reduced.filter(ImageFilter.GaussianBlur(3.5))
+    blurred = reduced.filter(ImageFilter.GaussianBlur(3.5 * scale))
     blurred = blurred.resize((width, height), Image.Resampling.BILINEAR)
     return ImageEnhance.Color(blurred).enhance(1.7)
 
 
+@lru_cache(maxsize=32)
 def _highlights(size, radius):
     width, height = size
     y = np.arange(height, dtype=np.float32)
@@ -108,7 +117,7 @@ def _highlights(size, radius):
     return Image.alpha_composite(image, detail.resize(size, Image.Resampling.LANCZOS))
 
 
-def compose(background, size, tint, radius):
+def compose(background, size, tint, radius, scale=1.0):
     """Return an RGBA liquid-glass image composed from an RGB screen capture."""
     width, height = (int(value) for value in size)
     if width <= 0 or height <= 0:
@@ -118,13 +127,15 @@ def compose(background, size, tint, radius):
         raise ValueError("El tinte del cristal no es válido.")
     if not math.isfinite(radius) or radius < 0:
         raise ValueError("El radio del cristal no es válido.")
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("La escala del cristal no es válida.")
 
     source = background.convert("RGB")
     if source.size != (width, height):
         source = source.resize((width, height), Image.Resampling.BILINEAR)
-    radius = min(float(radius), width / 2, height / 2)
-    blurred = _blur_and_saturate(source)
-    refracted = _refraction(blurred, radius)
+    radius = round(min(float(radius), width / 2, height / 2), 2)
+    blurred = _blur_and_saturate(source, scale)
+    refracted = _refraction(blurred, radius, scale)
     opacity = effective_opacity(blurred, tint)
     overlay = Image.new("RGBA", (width, height), (*tint.color, round(opacity * 255)))
     result = Image.alpha_composite(refracted.convert("RGBA"), overlay)

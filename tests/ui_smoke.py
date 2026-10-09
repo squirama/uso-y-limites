@@ -345,6 +345,43 @@ class UiSmokeTests(unittest.TestCase):
             self.assertTrue(layered.closed)
             self.assertEqual(exclusions[-1][1], False)
 
+
+    def test_glass_single_service_is_round_and_expanded_veil_floor_on_light_background(self):
+        class FakeLayeredWindow:
+            def __init__(self, _root):
+                self.images = []
+
+            def render(self, image, _x, _y):
+                self.images.append(image)
+
+            def close(self, reset_style=False):
+                pass
+
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "settings.json").write_text('{"render_mode":"auto"}', encoding="utf-8")
+            root = tk.Tk()
+            layered = FakeLayeredWindow(root)
+            app = App(root, data_dir=Path(folder), network=False, providers=["claude"],
+                      layered_factory=lambda _root: layered,
+                      capture_fn=lambda rect: Image.new("RGB", rect[2:], (250, 250, 250)),
+                      capture_exclusion_fn=lambda hwnd, excluded: None)
+            try:
+                self.finish_glass_capture(app)
+                image = layered.images[-1]
+                w, h = image.size
+                self.assertEqual(w, h)
+                corner = round(w * 0.13)
+                # Outside the circle but inside a 22 px rounded square: must be transparent.
+                self.assertLess(image.getpixel((corner, corner))[3], 40)
+                self.assertGreater(image.getpixel((w // 2, 2))[3], 200)
+                app.open = True
+                app.place()
+                # Expanding changes the rectangle, so the glass needs a fresh capture.
+                self.finish_glass_capture(app)
+                self.assertEqual(app.glass_surface_key[4], 0.62)
+            finally:
+                app.close()
+
     def test_glass_toggle_persists_and_updates_capture_exclusion(self):
         class FakeLayeredWindow:
             def __init__(self, _root):

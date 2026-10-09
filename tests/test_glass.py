@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from usage_monitor.glass import Tint, _refraction, compose, effective_opacity
+from usage_monitor.glass import Tint, _refraction, _refraction_indices, compose, effective_opacity
 
 
 class GlassTests(unittest.TestCase):
@@ -33,6 +33,25 @@ class GlassTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             compose(Image.new("RGB", (4, 4)), (4, 4), Tint(color=(0, 0, 256)), 1)
 
+
+    def test_single_service_circle_has_transparent_corners(self):
+        result = compose(Image.new("RGB", (70, 70), (200, 200, 200)), (70, 70), Tint(), 35, 1.25)
+        self.assertEqual(result.getpixel((9, 9))[3], 0)
+        self.assertEqual(result.getpixel((35, 35))[3], 255)
+
+    def test_refraction_geometry_is_cached_per_shape(self):
+        image = Image.new("RGB", (90, 50), (10, 20, 30))
+        _refraction(image, 20, 1.25)
+        hits = _refraction_indices.cache_info().hits
+        _refraction(image, 20, 1.25)
+        self.assertEqual(_refraction_indices.cache_info().hits, hits + 1)
+
+    def test_refraction_band_follows_display_scale(self):
+        values = np.tile(np.arange(120, dtype=np.uint8), (60, 1))
+        source = Image.fromarray(np.repeat(values[:, :, None], 3, axis=2), "RGB")
+        # At scale 1 the band is 14 px: column 16 is untouched; at scale 1.5 it is 21 px.
+        self.assertEqual(_refraction(source, 20, 1.0).getpixel((16, 30)), source.getpixel((16, 30)))
+        self.assertNotEqual(_refraction(source, 20, 1.5).getpixel((16, 30)), source.getpixel((16, 30)))
 
 if __name__ == "__main__":
     unittest.main()
