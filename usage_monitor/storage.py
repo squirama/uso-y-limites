@@ -4,6 +4,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import tempfile
+import time
 
 from .models import UsageError, UsageSnapshot, WindowUsage, number, timestamp
 
@@ -11,6 +12,7 @@ from .models import UsageError, UsageSnapshot, WindowUsage, number, timestamp
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / ".runtime"
 MAX_FILE_BYTES = 32768
+ALERT_RETENTION_SECONDS = 7 * 86400
 
 
 def read_json(path):
@@ -55,14 +57,55 @@ def load_settings(data_dir=DATA_DIR):
     dock = raw.get("dock")
     valid = (isinstance(dock, list) and len(dock) == 3 and dock[0] in {"left", "right", "top", "bottom"} and
              all(isinstance(v, int) and not isinstance(v, bool) and abs(v) < 100000 for v in dock[1:]))
-    return {"providers": selected, "dock": dock if valid else None}
+    alerts = raw.get("alerts", True)
+    return {"providers": selected, "dock": dock if valid else None,
+            "alerts": alerts if isinstance(alerts, bool) else True}
 
 
 def save_settings(settings, data_dir=DATA_DIR):
     providers = [item for item in ("claude", "codex") if item in settings.get("providers", ())]
     if not providers:
         raise UsageError("Debe quedar al menos un servicio seleccionado.")
-    write_json(data_dir / "settings.json", {"providers": providers, "dock": settings.get("dock")})
+    alerts = settings.get("alerts", True)
+    if not isinstance(alerts, bool):
+        raise UsageError("La preferencia de avisos no es válida.")
+    write_json(data_dir / "settings.json", {
+        "providers": providers, "dock": settings.get("dock"), "alerts": alerts,
+    })
+
+
+def load_alerts(data_dir=DATA_DIR, now=None):
+    raw = read_json(data_dir / "alerts.json") or {}
+    entries = raw.get("entries", [])
+    if not isinstance(entries, list) or len(entries) > 1000:
+        raise UsageError("El registro local de avisos no es válido.")
+    now = time.time() if now is None else now
+    alerts = {}
+    try:
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("provider") not in {"claude", "codex"}:
+                raise ValueError
+            resets_at = number(entry.get("resets_at"), "fecha de reinicio")
+            notified_at = number(entry.get("notified_at"), "fecha del aviso")
+            if notified_at > now + 300:
+                raise ValueError
+            if now - notified_at <= ALERT_RETENTION_SECONDS:
+                alerts[(entry["provider"], resets_at)] = notified_at
+    except (KeyError, TypeError, ValueError, UsageError):
+        raise UsageError("El registro local de avisos no es válido.") from None
+    return alerts
+
+
+def save_alerts(alerts, data_dir=DATA_DIR, now=None):
+    now = time.time() if now is None else now
+    entries = [
+        {"provider": provider, "resets_at": resets_at, "notified_at": notified_at}
+        for (provider, resets_at), notified_at in alerts.items()
+        if provider in {"claude", "codex"}
+        and now - notified_at <= ALERT_RETENTION_SECONDS
+    ]
+    entries.sort(key=lambda item: item["notified_at"])
+    write_json(data_dir / "alerts.json", {"entries": entries[-100:]})
 
 
 def save_snapshot(provider, snapshot, data_dir=DATA_DIR):

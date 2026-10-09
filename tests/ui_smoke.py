@@ -15,9 +15,11 @@ class Event:
 
 
 class UiSmokeTests(unittest.TestCase):
-    def make_app(self, folder, providers, idle_getter=None):
+    def make_app(self, folder, providers, idle_getter=None, notifier=None):
         root = tk.Tk()
         kwargs = {"idle_getter": idle_getter} if idle_getter else {}
+        if notifier is not None:
+            kwargs["notifier"] = notifier
         return root, App(root, data_dir=Path(folder), network=False, providers=providers, **kwargs)
 
     def test_provider_selection_view_size_persistence_and_docking(self):
@@ -171,6 +173,33 @@ class UiSmokeTests(unittest.TestCase):
                     self.assertFalse(app.away)
                     self.assertEqual(refreshed, ["claude", "codex"])
                     self.assertEqual([call.args[0] for call in after.call_args_list], [30000, 30000])
+            finally:
+                app.close()
+
+    def test_alerts_are_once_per_five_hour_window_and_can_be_disabled(self):
+        notices = []
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude"], notifier=lambda *args: notices.append(args))
+            try:
+                now = time.time()
+                snapshot = UsageSnapshot((WindowUsage("5 horas", 90, now + 3600),
+                                          WindowUsage("7 días", 99, now + 86400)), now, "test")
+                app.check_alerts("claude", snapshot)
+                app.check_alerts("claude", snapshot)
+                self.assertEqual(len(notices), 1)
+                self.assertEqual(notices[0][0], "Claude al 90 %")
+                self.assertIn("Se restablece a las", notices[0][1])
+
+                next_window = UsageSnapshot((WindowUsage("5 horas", 95, now + 7200),), now, "test")
+                app.check_alerts("claude", next_window)
+                self.assertEqual(len(notices), 2)
+
+                app.alerts_var.set(False)
+                app.toggle_alerts()
+                disabled_window = UsageSnapshot((WindowUsage("5 horas", 99, now + 10800),), now, "test")
+                app.check_alerts("claude", disabled_window)
+                self.assertEqual(len(notices), 2)
+                self.assertFalse(app.settings["alerts"])
             finally:
                 app.close()
 

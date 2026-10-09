@@ -17,6 +17,8 @@ TEXT = "#f2f2f7"
 MUTED = "#a1a1a6"
 ERROR = "#f09595"
 COLORS = {"claude": "#F0997B", "codex": "#5DCAA5"}
+WARNING = "#EF9F27"
+CRITICAL = "#E24B4A"
 NAMES = {"claude": "Claude", "codex": "Codex"}
 RADIUS = 22
 COMPACT = (124, 56)
@@ -92,6 +94,14 @@ def age_label(observed_at, now):
     return f"hace {seconds // 3600} h"
 
 
+def level_color(provider_key, percent):
+    if percent is not None and percent >= 95:
+        return CRITICAL
+    if percent is not None and percent >= 80:
+        return WARNING
+    return COLORS[provider_key]
+
+
 def _canvas(size):
     image = Image.new("RGB", (size[0] * SS, size[1] * SS), KEY)
     draw = ImageDraw.Draw(image)
@@ -150,7 +160,8 @@ def compact(providers, vertical):
         offset = (index - (len(providers) - 1) / 2) * step
         cx = size[0] * SS / 2 + (0 if vertical else offset)
         cy = size[1] * SS / 2 + (offset if vertical else 0)
-        _ring(draw, cx, cy, provider.percent, COLORS[provider.key], MUTED if provider.loading else TEXT)
+        _ring(draw, cx, cy, provider.percent, level_color(provider.key, provider.percent),
+              MUTED if provider.loading else TEXT)
     return _finish(image, size)
 
 
@@ -199,7 +210,8 @@ def _layout(providers, draw=None):
                 draw.rounded_rectangle((left, y * s, right, (y + 4) * s), 2 * s, fill=TRACK)
                 filled = left + (right - left) * min(row.percent, 100) / 100
                 if filled - left >= 4 * s:
-                    draw.rounded_rectangle((left, y * s, filled, (y + 4) * s), 2 * s, fill=COLORS[provider.key])
+                    draw.rounded_rectangle((left, y * s, filled, (y + 4) * s), 2 * s,
+                                           fill=level_color(provider.key, row.percent))
             y += 8
             text(PAD, y, row.reset, 11, MUTED)
             text(EXPANDED_WIDTH - PAD, y, row.remaining, 11, MUTED, anchor="ra")

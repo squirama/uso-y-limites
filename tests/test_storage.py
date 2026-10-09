@@ -3,7 +3,8 @@ import tempfile
 import unittest
 
 from usage_monitor.models import UsageError, UsageSnapshot, WindowUsage
-from usage_monitor.storage import load_snapshot, save_snapshot, load_settings, save_settings, write_json
+from usage_monitor.storage import (load_snapshot, save_snapshot, load_settings, save_settings, write_json,
+                                   load_alerts, save_alerts)
 
 
 class StorageTests(unittest.TestCase):
@@ -42,6 +43,27 @@ class StorageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             save_settings({"providers": ["codex"], "dock": None}, Path(folder))
             self.assertEqual(load_settings(Path(folder))["providers"], ["codex"])
+
+    def test_alert_preference_defaults_on_and_persists_off(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            self.assertTrue(load_settings(directory)["alerts"])
+            save_settings({"providers": ["codex"], "dock": None, "alerts": False}, directory)
+            self.assertFalse(load_settings(directory)["alerts"])
+
+    def test_alert_history_roundtrip_and_seven_day_retention(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            history = {
+                ("claude", 2000): 1000,
+                ("codex", 3000): 100,
+            }
+            save_alerts(history, directory, now=1000 + 7 * 86400)
+            self.assertEqual(load_alerts(directory, now=1000 + 7 * 86400), {("claude", 2000): 1000})
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 if __name__ == "__main__":

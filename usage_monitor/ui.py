@@ -2,6 +2,7 @@
 
 import ctypes
 import ctypes.wintypes
+from datetime import datetime
 import math
 import os
 from pathlib import Path
@@ -17,8 +18,10 @@ from .claude_probe import ClaudeProbe
 from .codex import CodexClient
 from .idle import idle_seconds
 from .models import UsageError
+from .notify import send_notification
 from .schedule import ClaudeSchedule
-from .storage import DATA_DIR, load_settings, save_settings, load_snapshot, save_snapshot
+from .storage import (DATA_DIR, load_settings, save_settings, load_snapshot, save_snapshot,
+                     load_alerts, save_alerts)
 
 
 MARGIN = 12          # Gap between the widget and the screen edge.
@@ -70,12 +73,14 @@ def smooth(t):
 
 
 class App:
-    def __init__(self, root, data_dir=DATA_DIR, network=True, providers=None, idle_getter=idle_seconds):
+    def __init__(self, root, data_dir=DATA_DIR, network=True, providers=None, idle_getter=idle_seconds,
+                 notifier=send_notification):
         self.root = root
         self.data_dir = Path(data_dir)
         self.network = network
         self.idle_getter = idle_getter
         self.away = False
+        self.notifier = notifier
         self.events = queue.Queue(maxsize=64)
         self.snapshots = {"claude": None, "codex": None}
         self.errors = {"claude": "", "codex": ""}
@@ -88,12 +93,19 @@ class App:
         self.claude_probe = ClaudeProbe()
         self.claude_schedule = ClaudeSchedule(time.time())
         self.claude_timer = None
+        try:
+            self.alert_history = load_alerts(self.data_dir)
+            self.alert_history_valid = True
+        except UsageError:
+            self.alert_history = {}
+            self.alert_history_valid = False
         # One pending timer per repeating loop, so toggling a provider never runs it twice.
         self.loops = {"codex": None, "watch": None}
         try:
             self.settings = load_settings(self.data_dir)
         except UsageError:
-            self.settings = {"providers": ["claude", "codex"], "dock": None}
+            self.settings = {"providers": ["claude", "codex"], "dock": None, "alerts": True}
+        self.alerts_enabled = self.settings.get("alerts", True)
         self.provider_override = providers is not None
         selected = providers if self.provider_override else self.settings.get("providers", ["claude", "codex"])
         self.providers = [key for key in ("claude", "codex") if key in selected]
@@ -131,6 +143,9 @@ class App:
             self.provider_vars[key] = variable
             self.menu.add_checkbutton(label=label, variable=variable,
                                       command=lambda provider=key: self.toggle_provider(provider))
+        self.menu.add_separator()
+        self.alerts_var = tk.BooleanVar(value=self.alerts_enabled)
+        self.menu.add_checkbutton(label="Avisos", variable=self.alerts_var, command=self.toggle_alerts)
         self.menu.add_separator()
         self.menu.add_command(label="Actualizar", command=self.manual_refresh)
         self.menu.add_separator()
@@ -554,6 +569,7 @@ class App:
                     except UsageError as exc:
                         error = str(exc)
                     self.snapshots[provider] = snapshot
+                    self.check_alerts(provider, snapshot)
             self.errors[provider] = error
             if probe:
                 self.loading[provider] = False
@@ -613,7 +629,7 @@ class App:
         elif "codex" not in previous:
             self.generations["codex"] += 1
             self.refresh_codex()
-            self.loop("codex", CODEX_MS, self.auto_codex)
+            self.loop("codex", AWAY_CODEX_MS if self.away else CODEX_MS, self.auto_codex)
         if not self.provider_override:
             try:
                 save_settings(self.settings, self.data_dir)
@@ -623,6 +639,41 @@ class App:
         self.dock["along"] = self.corner_lock(
             self.dock["side"], self.dock["along"], self.compact_size(), self.area())
         self.place()
+
+    def toggle_alerts(self):
+        enabled = self.alerts_var.get()
+        previous = self.alerts_enabled
+        self.alerts_enabled = enabled
+        self.settings["alerts"] = enabled
+        try:
+            save_settings(self.settings, self.data_dir)
+        except UsageError:
+            self.alerts_enabled = previous
+            self.alerts_var.set(previous)
+
+    def check_alerts(self, provider, snapshot):
+        if not self.alerts_enabled or not self.alert_history_valid:
+            return
+        for window in snapshot.windows:
+            label = window.label.rsplit("·", 1)[-1].strip()
+            if label != "5 horas" or window.used_percent < 90 or window.resets_at is None:
+                continue
+            key = (provider, window.resets_at)
+            if key in self.alert_history:
+                continue
+            try:
+                reset_time = datetime.fromtimestamp(window.resets_at).strftime("%H:%M")
+                self.notifier(
+                    f"{provider.capitalize()} al 90 %",
+                    f"Se restablece a las {reset_time}.",
+                )
+            except Exception:
+                pass
+            self.alert_history[key] = time.time()
+            try:
+                save_alerts(self.alert_history, self.data_dir)
+            except UsageError:
+                pass
 
     def tick(self):
         # Expanded text shows ages in seconds; the compact view only needs occasional repaint.

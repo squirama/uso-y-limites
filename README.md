@@ -65,6 +65,9 @@ porcentaje usado de la ventana de 5 horas. Un guion significa que todavía no ha
 - Hace cuánto se leyeron los datos, o «Actualizando…» mientras consulta.
 - Si llevas cinco minutos sin actividad, indica «sin actividad» y reduce las consultas;
   al volver, actualiza ambos servicios y recupera el ritmo habitual.
+- El anillo y cada barra cambian a ámbar desde el 80 % y a rojo desde el 95 %.
+- «Avisos» en el menú muestra una notificación de Windows una vez por cada sesión de
+  cinco horas al llegar al 90 %. Puedes desactivarlos desde el mismo menú.
 - El motivo si no ha podido leer los datos, por ejemplo una sesión caducada.
 
 **Imán:**

@@ -27,6 +27,12 @@ class RenderTests(unittest.TestCase):
         self.assertGreater(two[1], one[1])
         self.assertEqual(render.expanded([self.provider("codex")]).size, one)
 
+    def test_usage_colors_change_at_warning_and_critical_thresholds(self):
+        self.assertEqual(render.level_color("claude", 79.9), render.COLORS["claude"])
+        self.assertEqual(render.level_color("codex", 80), render.WARNING)
+        self.assertEqual(render.level_color("codex", 94.9), render.WARNING)
+        self.assertEqual(render.level_color("claude", 95), render.CRITICAL)
+
 
 if __name__ == "__main__":
     unittest.main()
