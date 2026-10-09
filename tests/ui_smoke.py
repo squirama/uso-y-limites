@@ -15,9 +15,10 @@ class Event:
 
 
 class UiSmokeTests(unittest.TestCase):
-    def make_app(self, folder, providers):
+    def make_app(self, folder, providers, idle_getter=None):
         root = tk.Tk()
-        return root, App(root, data_dir=Path(folder), network=False, providers=providers)
+        kwargs = {"idle_getter": idle_getter} if idle_getter else {}
+        return root, App(root, data_dir=Path(folder), network=False, providers=providers, **kwargs)
 
     def test_provider_selection_view_size_persistence_and_docking(self):
         for selected in (["claude"], ["codex"], ["claude", "codex"]):
@@ -142,6 +143,34 @@ class UiSmokeTests(unittest.TestCase):
                 self.assertIn(app.loops["codex"], app.after_ids)
                 self.assertIn(app.loops["watch"], app.after_ids)
                 self.assertLessEqual(len(app.after_ids), before + 1)
+            finally:
+                app.close()
+
+    def test_idle_and_resume_adjust_polling_without_duplicate_loops(self):
+        idle = {"seconds": 0}
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude", "codex"], lambda: idle["seconds"])
+            try:
+                app.network = True
+                refreshed = []
+                app.refresh_provider = refreshed.append
+                app.loop("codex", 30000, app.auto_codex)
+                app.schedule_claude(30)
+
+                idle["seconds"] = 300
+                with patch.object(root, "after", wraps=root.after) as after:
+                    app.update_idle_state()
+                    self.assertTrue(app.away)
+                    self.assertEqual([call.args[0] for call in after.call_args_list], [1800000, 300000])
+                    self.assertIn("En pausa: sin actividad", app.view()[0].age)
+
+                refreshed.clear()
+                idle["seconds"] = 4.9
+                with patch.object(root, "after", wraps=root.after) as after:
+                    app.update_idle_state()
+                    self.assertFalse(app.away)
+                    self.assertEqual(refreshed, ["claude", "codex"])
+                    self.assertEqual([call.args[0] for call in after.call_args_list], [30000, 30000])
             finally:
                 app.close()
 

@@ -63,6 +63,8 @@ porcentaje usado de la ventana de 5 horas. Un guion significa que todavía no ha
 - Uso de la sesión de 5 horas y de la semana, con su barra.
 - Hora a la que se restablece cada límite y cuánto falta.
 - Hace cuánto se leyeron los datos, o «Actualizando…» mientras consulta.
+- Si llevas cinco minutos sin actividad, indica «sin actividad» y reduce las consultas;
+  al volver, actualiza ambos servicios y recupera el ritmo habitual.
 - El motivo si no ha podido leer los datos, por ejemplo una sesión caducada.
 
 **Imán:**

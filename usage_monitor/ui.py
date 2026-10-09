@@ -15,6 +15,7 @@ from PIL import ImageTk
 from . import render
 from .claude_probe import ClaudeProbe
 from .codex import CodexClient
+from .idle import idle_seconds
 from .models import UsageError
 from .schedule import ClaudeSchedule
 from .storage import DATA_DIR, load_settings, save_settings, load_snapshot, save_snapshot
@@ -26,6 +27,8 @@ RESIST = 0.28        # Fraction of the pull that moves the widget while attached
 CORNER = 40          # Distance at which the widget locks into a corner.
 FRAME_MS = 15
 POLL_MS, WATCH_MS, HOVER_MS, CLOCK_MS, CODEX_MS = 200, 3000, 60, 1000, 30000
+IDLE_THRESHOLD_SECONDS, RESUME_THRESHOLD_SECONDS = 300, 5
+AWAY_CLAUDE_SECONDS, AWAY_CODEX_MS = 1800, 300000
 LABELS = {"claude": {"5 horas": "Sesión", "7 días": "Semana"}, "codex": {}}
 
 
@@ -67,10 +70,12 @@ def smooth(t):
 
 
 class App:
-    def __init__(self, root, data_dir=DATA_DIR, network=True, providers=None):
+    def __init__(self, root, data_dir=DATA_DIR, network=True, providers=None, idle_getter=idle_seconds):
         self.root = root
         self.data_dir = Path(data_dir)
         self.network = network
+        self.idle_getter = idle_getter
+        self.away = False
         self.events = queue.Queue(maxsize=64)
         self.snapshots = {"claude": None, "codex": None}
         self.errors = {"claude": "", "codex": ""}
@@ -263,6 +268,8 @@ class App:
                         render.countdown(window.resets_at, now) if window.resets_at else ""))
                 percent = snapshot.windows[0].used_percent if snapshot.windows else None
                 age = render.age_label(snapshot.observed_at, now)
+            if self.away:
+                age = f"En pausa: sin actividad · {age}" if age else "En pausa: sin actividad"
             message = self.errors[key] or ("" if snapshot else "Sin datos todavía.")
             providers.append(render.Provider(key, percent, tuple(rows), age, message, self.loading[key]))
         return providers
@@ -487,13 +494,39 @@ class App:
         self.loops["codex"] = None
         if "codex" in self.providers:
             self.refresh_codex()
-            self.loop("codex", CODEX_MS, self.auto_codex)
+            self.loop("codex", AWAY_CODEX_MS if self.away else CODEX_MS, self.auto_codex)
 
     def schedule_claude(self, delay):
         self.cancel(self.claude_timer)
         self.claude_timer = None
         if "claude" in self.providers:
+            if self.away:
+                delay = max(delay, AWAY_CLAUDE_SECONDS)
             self.claude_timer = self.later(delay * 1000, self.refresh_claude)
+
+    def update_idle_state(self):
+        try:
+            idle = max(0, float(self.idle_getter()))
+        except (TypeError, ValueError, OSError):
+            idle = 0
+        if not self.away and idle >= IDLE_THRESHOLD_SECONDS:
+            self.away = True
+            if "claude" in self.providers:
+                self.schedule_claude(max(self.claude_schedule.delay, AWAY_CLAUDE_SECONDS))
+            if "codex" in self.providers:
+                self.loop("codex", AWAY_CODEX_MS, self.auto_codex)
+            self.redraw()
+        elif self.away and idle < RESUME_THRESHOLD_SECONDS:
+            self.away = False
+            if "claude" in self.providers:
+                self.claude_schedule.reset(time.time())
+            for provider in self.providers:
+                self.refresh_provider(provider)
+            if "claude" in self.providers:
+                self.schedule_claude(self.claude_schedule.delay)
+            if "codex" in self.providers:
+                self.loop("codex", CODEX_MS, self.auto_codex)
+            self.redraw()
 
     def observe_claude(self, snapshot, scheduled):
         # Readings from the status line can speed polling up, never slow it down.
@@ -593,6 +626,7 @@ class App:
 
     def tick(self):
         # Expanded text shows ages in seconds; the compact view only needs occasional repaint.
+        self.update_idle_state()
         if self.open:
             self.redraw()
         self.ticks = getattr(self, "ticks", 0) + 1
