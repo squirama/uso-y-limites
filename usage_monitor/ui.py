@@ -394,7 +394,8 @@ class App:
             providers = self.view()
             if (self.glass_active and self.glass_background is not None
                     and not self.animation and not self.drag):
-                image = render.content(providers, vertical(self.dock["side"]), self.open)
+                image = render.content(providers, vertical(self.dock["side"]), self.open,
+                                       self._glass_light(self.glass_background, self._glass_tint()))
             else:
                 image = (render.expanded(providers, self.render_mode) if self.open else
                          render.compact(providers, vertical(self.dock["side"]), self.render_mode))
@@ -616,23 +617,38 @@ class App:
             self.glass_transition = (now, current, target)
             self.glass_surface = None
 
-    def _compose_glass(self, content_image):
-        if self.glass_background is None:
-            raise ValueError("El fondo del cristal todavía no está disponible.")
+    def _glass_tint(self):
+        """Veil for the resting widget, with its minimum over light backgrounds per state."""
         opacity = self._current_glass_opacity()
-        # Minimum veil over light backgrounds, per state: rest, compact, expanded.
         if self.open:
             bright_minimum = GLASS_BRIGHT_MINIMUM["expanded"]
         elif opacity >= 0.2:
             bright_minimum = GLASS_BRIGHT_MINIMUM["compact"]
         else:
             bright_minimum = GLASS_BRIGHT_MINIMUM["rest"]
+        return glass.Tint(opacity=opacity, bright_minimum=bright_minimum)
+
+    def _glass_light(self, background, tint):
+        try:
+            return background is not None and glass.surface_is_light(background, tint)
+        except Exception:
+            return False
+
+    def _motion_light(self, rect):
+        background = self._wide_background(rect) or self.glass_background
+        tint = glass.Tint(opacity=GLASS_OPACITY["rest"], bright_minimum=GLASS_BRIGHT_MINIMUM["rest"])
+        return self._glass_light(background, tint)
+
+    def _compose_glass(self, content_image):
+        if self.glass_background is None:
+            raise ValueError("El fondo del cristal todavía no está disponible.")
+        tint = self._glass_tint()
+        opacity, bright_minimum = tint.opacity, tint.bright_minimum
         logical = (render.expanded_size(self.view()) if self.open else
                    render.compact_size(len(self.providers), vertical(self.dock["side"])))
         radius = self.px(render.shape_radius(logical))
         key = (self.glass_signature, self.rect[2:], round(opacity, 3), radius, bright_minimum, self.scale)
         if self.glass_surface is None or key != self.glass_surface_key:
-            tint = glass.Tint(opacity=opacity, bright_minimum=bright_minimum)
             self.glass_surface = glass.compose(
                 self.glass_background, self.rect[2:], tint, radius, self.scale)
             self.glass_surface_key = key
@@ -721,7 +737,8 @@ class App:
 
     def _moving_glass(self, rect):
         if self.motion_content is None:
-            self.motion_content = render.content(self.view(), vertical(self.dock["side"]), False)
+            self.motion_content = render.content(self.view(), vertical(self.dock["side"]), False,
+                                                 self._motion_light(rect))
         return self._motion_glass(rect, self.motion_content, self._compact_radius())
 
     def toggle_glass(self):
@@ -847,7 +864,8 @@ class App:
         """Content and radius for glass animation frames, or (None, None) without glass."""
         if not (self.glass_active and self.layered):
             return None, None
-        self.motion_content = render.content(self.view(), vertical(self.dock["side"]), False)
+        self.motion_content = render.content(self.view(), vertical(self.dock["side"]), False,
+                                             self._motion_light(self.rect))
         return self.motion_content, self._compact_radius()
 
     def _end_motion(self):

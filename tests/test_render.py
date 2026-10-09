@@ -42,7 +42,8 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(image.mode, "RGBA")
         self.assertEqual(image.size, (56, 56))
         self.assertEqual(image.getpixel((0, 0))[3], 0)
-        self.assertGreater(image.getpixel((28, 28))[3], 0)
+        # The ring track runs 17 px from the centre (28, 28).
+        self.assertGreater(image.getpixel((28, 11))[3], 0)
 
     def test_expanded_sizes_fit_one_and_two_providers(self):
         one = render.expanded_size([self.provider("claude")])

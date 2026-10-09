@@ -18,6 +18,9 @@ MUTED = "#a1a1a6"
 # On glass the background can be light, so secondary text and tracks are translucent white.
 GLASS_MUTED = (255, 255, 255, 184)
 GLASS_TRACK = (255, 255, 255, 64)
+# Over light glass the pastel colours lose contrast: deeper tones, dark tracks, no shadow.
+GLASS_ACCENT_ON_LIGHT = {"claude": "#C2410C", "codex": "#0B7A5C"}
+GLASS_TRACK_ON_LIGHT = (0, 0, 0, 46)
 ERROR = "#f09595"
 COLORS = {"claude": "#F0997B", "codex": "#5DCAA5"}
 WARNING = "#EF9F27"
@@ -151,9 +154,9 @@ def background(size, mode="colorkey"):
 
 def _draw_text(draw, point, value, typeface, color, anchor="la", shadow=False):
     if shadow:
+        # A thin 1 px drop shadow: a blurred stroke made the text look out of focus.
         x, y = point
-        draw.text((x, y + SS), value, font=typeface, fill=(0, 0, 0, 120), anchor=anchor,
-                  stroke_width=SS, stroke_fill=(0, 0, 0, 80))
+        draw.text((x, y + SS), value, font=typeface, fill=(0, 0, 0, 110), anchor=anchor)
     draw.text(point, value, font=typeface, fill=color, anchor=anchor)
 
 
@@ -199,7 +202,7 @@ def _wrap(text, typeface, width):
     return lines + ([line] if line else [])
 
 
-def _layout(providers, draw=None, shadow=False, muted=MUTED, track=TRACK, accent=False):
+def _layout(providers, draw=None, shadow=False, muted=MUTED, track=TRACK, accent=None):
     """Lay out the expanded card; with draw=None only measures. Units are 1x pixels."""
     s, y = SS, PAD
     inner = EXPANDED_WIDTH - PAD * 2
@@ -214,7 +217,7 @@ def _layout(providers, draw=None, shadow=False, muted=MUTED, track=TRACK, accent
                 draw.rectangle((PAD * s, (y + 2) * s, (EXPANDED_WIDTH - PAD) * s, (y + 2) * s + 1), fill=track)
             y += 12
         # On glass, white text vanishes over light backgrounds: use each service's colour.
-        highlight = COLORS[provider.key] if accent else TEXT
+        highlight = accent[provider.key] if accent else TEXT
         text(PAD, y, NAMES[provider.key], 13, highlight, "medium")
         text(EXPANDED_WIDTH - PAD, y + 2, "Actualizando…" if provider.loading else provider.age, 11, muted, anchor="ra")
         y += 20
@@ -255,13 +258,16 @@ def expanded(providers, mode="colorkey"):
     return _finish(image, size)
 
 
-def content(providers, vertical=False, expanded_view=False):
+def content(providers, vertical=False, expanded_view=False, light=False):
     """Draw only the widget content on transparency for composition over a glass surface."""
     size = expanded_size(providers) if expanded_view else compact_size(len(providers), vertical)
     image = Image.new("RGBA", (size[0] * SS, size[1] * SS), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
+    accent = GLASS_ACCENT_ON_LIGHT if light else COLORS
     if expanded_view:
-        _layout(providers, draw, shadow=True, muted=GLASS_MUTED, track=GLASS_TRACK, accent=True)
+        _layout(providers, draw, shadow=not light, muted=GLASS_MUTED,
+                track=GLASS_TRACK_ON_LIGHT if light else GLASS_TRACK,
+                accent=GLASS_ACCENT_ON_LIGHT if light else COLORS)
     else:
         step = 48 * SS
         for index, provider in enumerate(providers):
@@ -269,7 +275,8 @@ def content(providers, vertical=False, expanded_view=False):
             cx = size[0] * SS / 2 + (0 if vertical else offset)
             cy = size[1] * SS / 2 + (offset if vertical else 0)
             _ring(draw, cx, cy, provider.percent, level_color(provider.key, provider.percent),
-                  GLASS_MUTED if provider.loading else COLORS[provider.key], shadow=True, track=GLASS_TRACK)
+                  GLASS_MUTED if provider.loading else accent[provider.key], shadow=not light,
+                  track=GLASS_TRACK_ON_LIGHT if light else GLASS_TRACK)
     return _finish(image, size)
 
 

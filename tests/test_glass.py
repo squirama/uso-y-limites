@@ -3,7 +3,8 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from usage_monitor.glass import Tint, _refraction, _refraction_indices, compose, effective_opacity
+from usage_monitor.glass import (Tint, _refraction, _refraction_indices, compose, effective_opacity,
+                                 surface_is_light)
 
 
 class GlassTests(unittest.TestCase):
@@ -52,6 +53,13 @@ class GlassTests(unittest.TestCase):
         # At scale 1 the band is 14 px: column 16 is untouched; at scale 1.5 it is 21 px.
         self.assertEqual(_refraction(source, 20, 1.0).getpixel((16, 30)), source.getpixel((16, 30)))
         self.assertNotEqual(_refraction(source, 20, 1.5).getpixel((16, 30)), source.getpixel((16, 30)))
+
+    def test_surface_is_light_follows_background_and_veil(self):
+        rest = Tint(opacity=0.08, bright_minimum=0.18)
+        self.assertTrue(surface_is_light(Image.new("RGB", (16, 16), (245, 245, 245)), rest))
+        self.assertFalse(surface_is_light(Image.new("RGB", (16, 16), (25, 25, 30)), rest))
+        # The expanded veil darkens even a white background enough for light text.
+        self.assertFalse(surface_is_light(Image.new("RGB", (16, 16), "white"), Tint(opacity=0.58, bright_minimum=0.62)))
 
 if __name__ == "__main__":
     unittest.main()

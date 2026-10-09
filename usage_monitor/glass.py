@@ -12,6 +12,7 @@ SUPERSAMPLE = 3
 REFRACTION_WIDTH = 14
 REFRACTION_SHIFT = 13
 BRIGHTNESS_THRESHOLD = 0.6
+LIGHT_SURFACE = 0.5
 
 
 @dataclass(frozen=True)
@@ -27,12 +28,22 @@ def effective_opacity(background, tint):
         raise TypeError("El tinte no es válido.")
     if not 0 <= tint.opacity <= 1 or not 0 <= tint.bright_minimum <= 1:
         raise ValueError("La opacidad del cristal no es válida.")
-    sample = background.convert("RGB").resize((16, 16), Image.Resampling.BOX)
-    pixels = np.asarray(sample, dtype=np.float32) / 255
-    luminance = float(np.mean(pixels[..., 0] * 0.2126 + pixels[..., 1] * 0.7152 + pixels[..., 2] * 0.0722))
-    if luminance > BRIGHTNESS_THRESHOLD:
+    if _luminance(background) > BRIGHTNESS_THRESHOLD:
         return max(tint.opacity, tint.bright_minimum)
     return tint.opacity
+
+
+def _luminance(image):
+    sample = image.convert("RGB").resize((16, 16), Image.Resampling.BOX)
+    pixels = np.asarray(sample, dtype=np.float32) / 255
+    return float(np.mean(pixels[..., 0] * 0.2126 + pixels[..., 1] * 0.7152 + pixels[..., 2] * 0.0722))
+
+
+def surface_is_light(background, tint):
+    """True when the composed glass will look light, so content needs deep colours."""
+    opacity = effective_opacity(background, tint)
+    tint_luminance = (0.2126 * tint.color[0] + 0.7152 * tint.color[1] + 0.0722 * tint.color[2]) / 255
+    return (1 - opacity) * _luminance(background) + opacity * tint_luminance > LIGHT_SURFACE
 
 
 @lru_cache(maxsize=32)
