@@ -116,6 +116,20 @@ anterior de color clave, con un fino contorno oscuro en los bordes.
 Para forzar el modo anterior, pon `"render_mode": "colorkey"` en `.runtime/settings.json`.
 El valor por defecto es `"auto"`, que también se usa si el campo falta o no es válido.
 
+## Cristal
+
+El modo **Cristal** desenfoca y refracta el fondo, y añade un velo y un brillo cuyo efecto
+cambia al ampliar el widget. Se activa por defecto cuando está disponible la ventana por
+capas. Puedes activarlo o desactivarlo con la casilla **Cristal** del menú del clic derecho;
+la preferencia se guarda en `.runtime/settings.json`.
+
+Con el widget visible, el fondo se actualiza unas 10 veces por segundo. Tras 5 minutos sin
+actividad, baja a una actualización por segundo; si una aplicación ocupa toda la pantalla
+del monitor del widget, el refresco se pausa hasta que salgas de pantalla completa.
+
+Mientras Cristal está activo, el widget no aparece en capturas de pantalla ni al compartir
+pantalla. Desactiva la casilla **Cristal** si necesitas que aparezca en ellas.
+
 ## Claude: la cuota y cómo se lee
 
 ### Qué es la cuota
@@ -256,13 +270,16 @@ ausente, nunca como cero.
 | --- | --- |
 | `Abrir.vbs`, `app.pyw` | Arranque sin consola. |
 | `instalar_inicio.ps1` | Activa o quita el arranque con Windows. |
-| `usage_monitor/ui.py` | Ventana flotante: imán, resistencia, rebote, ampliación, ratón, selección de servicios y ritmo de consultas. |
-| `usage_monitor/render.py` | Dibujo Pillow en alfa por píxel o modo de color clave, supersampleado a 3x. |
+| `usage_monitor/ui.py` | Ventana flotante: imán, resistencia, rebote, ampliación, Cristal, selección de servicios y ritmo de consultas. |
+| `usage_monitor/render.py` | Dibujo Pillow en alfa por píxel o modo de color clave, supersampleado a 3x, con la capa de contenido para Cristal. |
+| `usage_monitor/capture.py` | Captura el fondo de pantalla y activa o retira la exclusión de capturas del widget. |
+| `usage_monitor/glass.py` | Compone el desenfoque, la refracción y el velo del modo Cristal. |
 | `usage_monitor/layered.py` | Ventana Win32 por capas, alfa premultiplicado y gestión de recursos GDI. |
 | `usage_monitor/fullscreen.py` | Detección de aplicaciones a pantalla completa en el monitor del widget. |
+| `usage_monitor/win32types.py` | Tipos Win32 compartidos para consultar los monitores. |
 | `usage_monitor/idle.py` | Medición de inactividad del usuario en Windows. |
 | `usage_monitor/notify.py` | Avisos de Windows sin pasar texto sin escapar a PowerShell. |
-| `usage_monitor/storage.py` | Lectura y escritura segura de `.runtime/`, preferencias y registro de avisos. |
+| `usage_monitor/storage.py` | Lectura y escritura segura de `.runtime/`, preferencias (incluido Cristal) y registro de avisos. |
 | `usage_monitor/claude_probe.py` | Consulta automática mínima a Claude Code. |
 | `usage_monitor/schedule.py` | Ritmo adaptativo de Claude (30 s, 5 min, 30 min). |
 | `usage_monitor/statusline.py`, `claude_statusline.py` | Receptor de la línea de estado de Claude Code. |
@@ -302,9 +319,12 @@ py -3 -m unittest discover -s tests -p ui_smoke.py -v
 Cubren la validación de datos y de ajustes, el ritmo adaptativo, el protocolo de Codex, el
 dibujo con uno y dos servicios, la opción `--providers`, la inactividad, los colores y
 avisos (una vez por ventana, escapado del texto), la detección de pantalla completa, la
-transparencia por capas con su alternativa, y pruebas reales de la ventana: tirón corto y
-largo, imán al borde, orientación, ampliación, selección de servicios sin consultas de los
-desactivados, un único bucle de consulta tras activar y desactivar, y cierre limpio.
+transparencia por capas con su alternativa y Cristal (composición, refracción, caché,
+exclusión de capturas y tipos Win32 compartidos). Las pruebas de interfaz también comprueban
+el refresco de Cristal, su pausa en pantalla completa y su reducción durante la inactividad,
+además del arrastre, el imán, la orientación, la ampliación, la selección de servicios sin
+consultas de los desactivados, un único bucle de consulta tras activar y desactivar, y el
+cierre limpio.
 
 ## Alternativas descartadas
 
