@@ -277,3 +277,7 @@ cierre limpio.
 - [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 - [Línea de estado de Claude Code](https://code.claude.com/docs/en/statusline)
 - [Referencia de la CLI de Claude Code (`claude -p`)](https://code.claude.com/docs/en/cli-reference)
+
+## Licencia
+
+[MIT](LICENSE).
