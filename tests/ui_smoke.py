@@ -13,6 +13,7 @@ from usage_monitor.models import UsageSnapshot, WindowUsage
 from usage_monitor.fullscreen import window_covers_monitor
 from usage_monitor.storage import load_settings, save_snapshot
 from usage_monitor.ui import App
+import usage_monitor.ui as ui_module
 
 
 class Event:
@@ -380,6 +381,124 @@ class UiSmokeTests(unittest.TestCase):
                 self.finish_glass_capture(app)
                 self.assertEqual(app.glass_surface_key[4], 0.62)
             finally:
+                app.close()
+
+
+    def make_glass_app(self, folder, capture_fn):
+        class FakeLayeredWindow:
+            def __init__(self, _root):
+                self.images = []
+
+            def render(self, image, _x, _y):
+                self.images.append(image)
+
+            def close(self, reset_style=False):
+                pass
+
+        Path(folder, "settings.json").write_text('{"render_mode":"auto"}', encoding="utf-8")
+        root = tk.Tk()
+        layered = FakeLayeredWindow(root)
+        app = App(root, data_dir=Path(folder), network=False, providers=["claude", "codex"],
+                  layered_factory=lambda _root: layered, capture_fn=capture_fn,
+                  capture_exclusion_fn=lambda hwnd, excluded: None)
+        return root, app, layered
+
+    def run_animation(self, root, app, seconds=3):
+        deadline = time.time() + seconds
+        while app.animation and time.time() < deadline:
+            root.update()
+            time.sleep(0.005)
+
+    def test_glass_follows_drag_flight_and_bounce(self):
+        def capture(rect):
+            # A gradient, so crops at different positions really differ.
+            return Image.linear_gradient("L").resize(rect[2:]).convert("RGB")
+
+        with tempfile.TemporaryDirectory() as folder:
+            root, app, layered = self.make_glass_app(folder, capture)
+            calls = []
+            original = ui_module.glass.compose
+            try:
+                with patch.object(ui_module.glass, "compose",
+                                  side_effect=lambda *a, **k: calls.append(a[1]) or original(*a, **k)):
+                    self.finish_glass_capture(app)
+                    x, y = app.rect[:2]
+                    app.on_press(Event(x + 5, y + 5))
+                    app.glass_wide_worker.join(timeout=2)
+                    left, top, right, bottom = app.area()
+                    before = len(calls)
+                    app.on_motion(Event(x - 15, y + 5))
+                    self.assertGreater(len(calls), before)
+                    # A jump outside the wide capture repeats the last glass frame, never opaque.
+                    app.on_motion(Event((left + right) // 2, bottom - 40))
+                    self.assertIs(layered.images[-1], app.glass_last_frame)
+                    app.on_release(Event((left + right) // 2, bottom - 40))
+                    self.run_animation(root, app)
+                    self.assertIsNone(app.animation)
+                    self.assertGreater(len(calls) - before, 10)
+                    self.assertEqual(app.dock["side"], "bottom")
+                    expected = app.anchored("bottom", app.dock["along"], app.compact_size())
+                    self.assertEqual(app.rect, tuple(round(v) for v in expected))
+                    # The resting glass starts from the wide capture, without an opaque flash.
+                    self.assertIsNotNone(app.glass_background)
+                    self.assertIsNone(app.motion_content)
+                    self.assertTrue(all(image.mode == "RGBA" for image in layered.images))
+            finally:
+                app.close()
+
+    def test_slow_bounce_frames_switch_to_precomposed_glass(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, app, _layered = self.make_glass_app(
+                folder, lambda rect: Image.new("RGB", rect[2:], (90, 110, 140)))
+            calls = []
+            original = ui_module.glass.compose
+
+            def slow(*args, **kwargs):
+                calls.append(args[1])
+                time.sleep(0.02)
+                return original(*args, **kwargs)
+
+            try:
+                self.finish_glass_capture(app)
+                app._request_wide_capture(app.rect)
+                app.glass_wide_worker.join(timeout=2)
+                with patch.object(ui_module.glass, "compose", side_effect=slow):
+                    app.squash(1)
+                    self.run_animation(root, app)
+                self.assertIsNone(app.animation)
+                # One base composition plus three measured frames, then the precomposed glass.
+                self.assertLessEqual(len(calls), 5)
+                self.assertGreaterEqual(len(app.glass_frame_ms), 3)
+            finally:
+                app.close()
+
+
+    def test_animation_timer_subtracts_frame_work(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude"])
+            delays = []
+            original_later = app.later
+
+            def spy(delay, callback):
+                # Only the animation's own frames; other loops (hover, poll) also use later().
+                if getattr(callback, "__name__", "") == "step":
+                    delays.append(delay)
+                return original_later(delay, callback)
+
+            def slow_frame(t):
+                time.sleep(0.006)
+                return (*app.rect, None)
+
+            try:
+                app.later = spy
+                app.animate(slow_frame, 120)
+                self.run_animation(root, app)
+                # The first call schedules the start (0); later frames must wait less than 15 ms.
+                frame_delays = delays[1:]
+                self.assertTrue(frame_delays)
+                self.assertTrue(all(d < ui_module.FRAME_MS for d in frame_delays))
+            finally:
+                app.later = original_later
                 app.close()
 
     def test_glass_toggle_persists_and_updates_capture_exclusion(self):

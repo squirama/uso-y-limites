@@ -38,6 +38,9 @@ AWAY_CLAUDE_SECONDS, AWAY_CODEX_MS = 1800, 300000
 GLASS_SETTLE_SECONDS, GLASS_TRANSITION_MS = 3, 300
 GLASS_OPACITY = {"compact": 0.26, "rest": 0.08, "expanded": 0.58}
 GLASS_BRIGHT_MINIMUM = {"compact": 0.35, "rest": 0.18, "expanded": 0.62}
+GLASS_WIDE_MARGIN = 160     # Extra area captured around the widget while it moves.
+GLASS_WIDE_MAX_AGE = 2.0    # Seconds a wide capture may seed the resting glass.
+GLASS_SLOW_FRAME_MS = 12    # Above this, the bounce deforms a precomposed glass instead.
 LABELS = {"claude": {"5 horas": "Sesión", "7 días": "Semana"}, "codex": {}}
 
 
@@ -174,6 +177,13 @@ class App:
         self.glass_pointer_out_since = time.monotonic()
         self.glass_opacity = GLASS_OPACITY["compact"]
         self.glass_transition = None
+        # Capturing costs ~6 ms of waiting for Windows whatever the size, so animations crop
+        # frames from one wide capture taken in a worker thread.
+        self.glass_wide = None
+        self.glass_wide_worker = None
+        self.glass_last_frame = None
+        self.glass_frame_ms = []
+        self.motion_content = None
         self.alerts_enabled = self.settings.get("alerts", True)
         self.provider_override = providers is not None
         selected = providers if self.provider_override else self.settings.get("providers", ["claude", "codex"])
@@ -376,6 +386,14 @@ class App:
         return providers
 
     def draw(self, image=None, size=None):
+        moving_glass = False
+        if image is None and self.glass_active and self.layered and (self.animation or self.drag) \
+                and not self.open:
+            image = self._moving_glass(self.rect)
+            moving_glass = image is not None
+        if image is None and self.glass_active and self.glass_background is None \
+                and not self.animation and not self.drag:
+            self._seed_glass_from_wide()
         if image is None:
             providers = self.view()
             if (self.glass_active and self.glass_background is not None
@@ -387,7 +405,7 @@ class App:
         if size and image.size != size:
             image = image.resize(size)
         if self.layered:
-            if self.glass_active and not self.animation and not self.drag:
+            if self.glass_active and not self.animation and not self.drag and not moving_glass:
                 if self.glass_background is None:
                     self._schedule_glass(0)
                     image = (render.expanded(self.view(), self.render_mode) if self.open else
@@ -626,6 +644,83 @@ class App:
         result.alpha_composite(content_image.convert("RGBA"))
         return result
 
+    def _request_wide_capture(self, rect):
+        """Capture a wide area around rect in a worker thread, unless one is in flight."""
+        if not self.glass_active or self.closed:
+            return
+        if self.glass_wide_worker is not None and self.glass_wide_worker.is_alive():
+            return
+        margin = self.px(GLASS_WIDE_MARGIN)
+        x, y, w, h = rect
+        area = (round(x - margin), round(y - margin), round(w + 2 * margin), round(h + 2 * margin))
+        generation = self.glass_generation
+
+        def work():
+            try:
+                image = self.capture_fn(area)
+                valid = isinstance(image, Image.Image) and image.size == area[2:]
+            except Exception:
+                valid = False
+            if valid and generation == self.glass_generation and not self.closed:
+                self.glass_wide = (area, image.convert("RGB"), time.monotonic())
+
+        self.glass_wide_worker = threading.Thread(target=work, daemon=True)
+        self.glass_wide_worker.start()
+
+    def _wide_background(self, rect, max_age=None):
+        """Crop the background behind rect from the wide capture, if it covers it."""
+        wide = self.glass_wide
+        if wide is None:
+            return None
+        (wx, wy, ww, wh), image, taken = wide
+        if max_age is not None and time.monotonic() - taken > max_age:
+            return None
+        x, y, w, h = (round(v) for v in rect)
+        if wx <= x and wy <= y and x + w <= wx + ww and y + h <= wy + wh:
+            return image.crop((x - wx, y - wy, x - wx + w, y - wy + h))
+        return None
+
+    def _seed_glass_from_wide(self):
+        # After an animation or on expanding, start from the recent wide capture instead of
+        # showing the opaque look until the next regular capture arrives.
+        background = self._wide_background(self.rect, GLASS_WIDE_MAX_AGE)
+        if background is not None:
+            self.glass_background = background
+            self.glass_signature = background.resize((16, 16), Image.Resampling.BOX).tobytes()
+            self.glass_surface = None
+            self.glass_surface_key = None
+
+    def _compact_radius(self, side=None):
+        logical = render.compact_size(len(self.providers), vertical(side or self.dock["side"]))
+        return self.px(render.shape_radius(logical))
+
+    def _motion_glass(self, rect, content, radius):
+        """Glass for a moving or deforming widget, or None to fall back to the opaque look."""
+        if not self.glass_active:
+            return None
+        self._request_wide_capture(rect)
+        background = self._wide_background(rect)
+        size = (max(1, round(rect[2])), max(1, round(rect[3])))
+        if background is None:
+            # No wide capture yet: repeat the last glass frame rather than flashing opaque.
+            last = self.glass_last_frame
+            return last if last is not None and last.size == size else None
+        opacity = self._current_glass_opacity()
+        floor = GLASS_BRIGHT_MINIMUM["compact"] if opacity >= 0.2 else GLASS_BRIGHT_MINIMUM["rest"]
+        try:
+            surface = glass.compose(background, size, glass.Tint(opacity=opacity, bright_minimum=floor),
+                                    radius, self.scale)
+        except Exception:
+            return None
+        surface.alpha_composite(content if content.size == size else content.resize(size))
+        self.glass_last_frame = surface
+        return surface
+
+    def _moving_glass(self, rect):
+        if self.motion_content is None:
+            self.motion_content = render.content(self.view(), vertical(self.dock["side"]), False)
+        return self._motion_glass(rect, self.motion_content, self._compact_radius())
+
     def toggle_glass(self):
         enabled = bool(self.glass_var.get())
         self.glass_preference = enabled
@@ -662,10 +757,14 @@ class App:
         start = time.perf_counter()
 
         def step():
-            t = min(1.0, (time.perf_counter() - start) * 1000 / duration)
+            began = time.perf_counter()
+            t = min(1.0, (began - start) * 1000 / duration)
             self.set_rect(*frames_fn(t))
             if t < 1:
-                self.animation = self.later(FRAME_MS, step)
+                # Tk timers on Windows tick every ~15.6 ms: subtract the frame's own work, or a
+                # few milliseconds of glass push every frame to two ticks (about 32 FPS).
+                spent = (time.perf_counter() - began) * 1000
+                self.animation = self.later(max(1, round(FRAME_MS - spent)), step)
             else:
                 self.animation = None
                 if done:
@@ -683,20 +782,28 @@ class App:
         image = render.compact(self.view(), vertical(self.dock["side"]), self.render_mode)
         # Keep the window size fixed while flying: resizing a layered window leaves square trails.
         sx, sy = sx + (sw - tw) / 2, sy + (sh - th) / 2
+        content, radius = self._animation_content()
 
         def frame(t):
             e = ease_in(t)
-            return sx + (tx - sx) * e, sy + (ty - sy) * e, tw, th, image
+            fx, fy = sx + (tx - sx) * e, sy + (ty - sy) * e
+            frame_image = image
+            if content is not None:
+                frame_image = self._motion_glass((fx, fy, tw, th), content, radius) or image
+            return fx, fy, tw, th, frame_image
         self.animate(frame, duration, lambda: self.squash(strength))
 
     def squash(self, strength):
         """Ball-like impact: flatten against the wall, rebound, settle."""
         if strength <= 0.02:
-            self.place()
+            self._end_motion()
             return
         side = self.dock["side"]
         x, y, w, h = self.anchored(side, self.dock["along"], self.compact_size())
         image = render.compact(self.view(), vertical(side), self.render_mode)
+        content, radius = self._animation_content()
+        base_glass = self._motion_glass((x, y, w, h), content, radius) if content is not None else None
+        self.glass_frame_ms = []
         s = strength
         # (time, perpendicular scale, parallel scale, offset from the wall)
         keys = [(0, 1 - .32 * s, 1 + .16 * s, 0), (.35, 1 + .1 * s, 1 - .06 * s, 10 * s),
@@ -719,8 +826,31 @@ class App:
             else:
                 ny = pad + offset if side == "top" else pad + h - new_perp - offset
                 box = (pad + (w - new_par) / 2, ny, new_par, new_perp)
-            return (*stage, render.on_stage(image, stage[2:], box, self.render_mode))
-        self.animate(frame, 620, self.place)
+            picture = image
+            if content is not None:
+                recent = self.glass_frame_ms[-3:]
+                if len(recent) == 3 and sum(recent) / 3 > GLASS_SLOW_FRAME_MS and base_glass is not None:
+                    picture = base_glass
+                else:
+                    started = time.perf_counter()
+                    screen_box = (stage[0] + box[0], stage[1] + box[1], box[2], box[3])
+                    frame_radius = radius * min(box[2] / w, box[3] / h)
+                    picture = self._motion_glass(screen_box, content, frame_radius) or base_glass or image
+                    self.glass_frame_ms.append((time.perf_counter() - started) * 1000)
+            return (*stage, render.on_stage(picture, stage[2:], box, self.render_mode))
+        self.animate(frame, 620, self._end_motion)
+
+    def _animation_content(self):
+        """Content and radius for glass animation frames, or (None, None) without glass."""
+        if not (self.glass_active and self.layered):
+            return None, None
+        self.motion_content = render.content(self.view(), vertical(self.dock["side"]), False)
+        return self.motion_content, self._compact_radius()
+
+    def _end_motion(self):
+        self.motion_content = None
+        self.glass_last_frame = None
+        self.place()
 
     # Pointer ----------------------------------------------------------------
 
@@ -729,6 +859,10 @@ class App:
         x, y = self.rect[:2]
         self.drag = {"dx": event.x_root - x, "dy": event.y_root - y, "start": (event.x_root, event.y_root),
                      "attached": True, "pull": 0, "moved": False}
+        self.motion_content = None
+        # Until the first wide capture arrives, a fast drag repeats the glass already on screen.
+        self.glass_last_frame = self.image if self.glass_active and not self.open else None
+        self._request_wide_capture(self.rect)
 
     def on_motion(self, event):
         drag = self.drag
