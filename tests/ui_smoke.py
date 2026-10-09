@@ -1,11 +1,17 @@
 from pathlib import Path
 import tempfile
+import time
 import tkinter as tk
 import unittest
 from unittest.mock import patch
 
 from usage_monitor.models import UsageSnapshot, WindowUsage
 from usage_monitor.ui import App
+
+
+class Event:
+    def __init__(self, x, y):
+        self.x_root, self.y_root = x, y
 
 
 class UiSmokeTests(unittest.TestCase):
@@ -80,6 +86,64 @@ class UiSmokeTests(unittest.TestCase):
             finally:
                 app.close()
 
+
+    def test_drag_resistance_tear_off_and_magnet(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude", "codex"])
+            try:
+                for key in ("claude", "codex"):
+                    app.snapshots[key] = UsageSnapshot((WindowUsage("5 horas", 66, time.time() + 3600),
+                        WindowUsage("7 días", 54, time.time() + 86400 * 3)), time.time(), "test")
+                root.update()
+                self.assertEqual(app.dock["side"], "right")
+                w, h = app.rect[2:]
+                self.assertLess(w, h)
+                # A short pull stays attached; a long one tears off and docks at the nearest edge.
+                x, y = app.rect[:2]
+                app.on_press(Event(x + 5, y + 5))
+                app.on_motion(Event(x - 20, y + 5))
+                self.assertTrue(app.drag["attached"])
+                left, top, right, bottom = app.area()
+                app.on_motion(Event((left + right) // 2, bottom - 20))
+                self.assertFalse(app.drag["attached"])
+                app.on_release(Event((left + right) // 2, bottom - 20))
+                self.assertEqual(app.dock["side"], "bottom")
+                deadline = time.time() + 2
+                while app.animation and time.time() < deadline:
+                    root.update()
+                w, h = app.rect[2:]
+                self.assertGreater(w, h)
+                app.open = True
+                app.place()
+                self.assertGreater(app.rect[3], h * 3)
+                self.assertEqual(app.settings["dock"][0], "bottom")
+            finally:
+                app.close()
+            self.assertFalse(app.after_ids)
+
+    def test_toggling_a_provider_keeps_a_single_polling_loop(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude", "codex"])
+            try:
+                app.network = True
+                app.client.fetch = lambda: None
+                app.claude_probe.fetch = lambda: None
+                app.loop("codex", 30000, app.auto_codex)
+                app.loop("watch", 3000, app.watch_claude)
+                before = len(app.after_ids)
+                for key in ("codex", "claude"):
+                    app.provider_vars[key].set(False)
+                    app.toggle_provider(key)
+                    app.provider_vars[key].set(True)
+                    app.toggle_provider(key)
+                for worker in app.workers:
+                    worker.join(timeout=2)
+                # Each loop keeps exactly one pending timer after being switched off and on.
+                self.assertIn(app.loops["codex"], app.after_ids)
+                self.assertIn(app.loops["watch"], app.after_ids)
+                self.assertLessEqual(len(app.after_ids), before + 1)
+            finally:
+                app.close()
 
 if __name__ == "__main__":
     unittest.main()

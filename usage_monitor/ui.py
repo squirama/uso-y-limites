@@ -83,6 +83,8 @@ class App:
         self.claude_probe = ClaudeProbe()
         self.claude_schedule = ClaudeSchedule(time.time())
         self.claude_timer = None
+        # One pending timer per repeating loop, so toggling a provider never runs it twice.
+        self.loops = {"codex": None, "watch": None}
         try:
             self.settings = load_settings(self.data_dir)
         except UsageError:
@@ -140,12 +142,12 @@ class App:
             for provider in self.providers:
                 self.refresh_provider(provider)
             if "codex" in self.providers:
-                self.later(CODEX_MS, self.auto_codex)
+                self.loop("codex", CODEX_MS, self.auto_codex)
             if "claude" in self.providers:
                 self.schedule_claude(self.claude_schedule.delay)
         self.later(POLL_MS, self.poll)
         if "claude" in self.providers:
-            self.later(WATCH_MS, self.watch_claude)
+            self.loop("watch", WATCH_MS, self.watch_claude)
         self.later(HOVER_MS, self.hover)
         self.later(CLOCK_MS, self.tick)
 
@@ -477,10 +479,15 @@ class App:
     def refresh_claude(self):
         self.refresh_provider("claude")
 
+    def loop(self, name, delay, callback):
+        self.cancel(self.loops[name])
+        self.loops[name] = self.later(delay, callback)
+
     def auto_codex(self):
+        self.loops["codex"] = None
         if "codex" in self.providers:
             self.refresh_codex()
-            self.later(CODEX_MS, self.auto_codex)
+            self.loop("codex", CODEX_MS, self.auto_codex)
 
     def schedule_claude(self, delay):
         self.cancel(self.claude_timer)
@@ -527,6 +534,7 @@ class App:
         self.later(POLL_MS, self.poll)
 
     def watch_claude(self):
+        self.loops["watch"] = None
         if "claude" not in self.providers:
             return
         # Claude Code's status line writes this file from another process.
@@ -540,7 +548,7 @@ class App:
             self.snapshots["claude"] = snapshot
             self.errors["claude"] = ""
             self.redraw()
-        self.later(WATCH_MS, self.watch_claude)
+        self.loop("watch", WATCH_MS, self.watch_claude)
 
     def toggle_provider(self, provider):
         selected = [key for key in ("claude", "codex") if self.provider_vars[key].get()]
@@ -558,16 +566,21 @@ class App:
         if "claude" not in selected:
             self.cancel(self.claude_timer)
             self.claude_timer = None
+            self.cancel(self.loops["watch"])
+            self.loops["watch"] = None
         elif "claude" not in previous:
             self.generations["claude"] += 1
             self.claude_schedule.reset(time.time())
             self.refresh_claude()
             self.schedule_claude(self.claude_schedule.delay)
-            self.later(WATCH_MS, self.watch_claude)
-        if "codex" in selected and "codex" not in previous:
+            self.loop("watch", WATCH_MS, self.watch_claude)
+        if "codex" not in selected:
+            self.cancel(self.loops["codex"])
+            self.loops["codex"] = None
+        elif "codex" not in previous:
             self.generations["codex"] += 1
             self.refresh_codex()
-            self.later(CODEX_MS, self.auto_codex)
+            self.loop("codex", CODEX_MS, self.auto_codex)
         if not self.provider_override:
             try:
                 save_settings(self.settings, self.data_dir)

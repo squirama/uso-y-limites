@@ -22,7 +22,7 @@ def record(payload, data_dir=DATA_DIR):
         previous = load_snapshot("claude", data_dir)
     except UsageError:
         previous = None
-    # A browser reading taken later must not be replaced by an older status line call.
+    # A newer reading (for example from the automatic query) must not be replaced by an older one.
     if previous is None or snapshot.observed_at >= previous.observed_at:
         save_snapshot("claude", snapshot, data_dir)
     return snapshot
