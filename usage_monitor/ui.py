@@ -262,8 +262,8 @@ class App:
         else:
             along = area[1]
         self.dock = {"side": side, "along": self.corner_lock(side, along, size, area)}
-        x, y, w, h = self.anchored(side, self.dock["along"], size, area)
-        self.rect = (x, y, w, h)
+        # Centring on a saved point can leave half pixels, which Tk geometry rejects.
+        self.rect = tuple(round(v) for v in self.anchored(side, self.dock["along"], size, area))
 
     def save_dock(self):
         x, y, w, h = self.rect

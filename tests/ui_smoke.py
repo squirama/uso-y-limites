@@ -345,5 +345,19 @@ class UiSmokeTests(unittest.TestCase):
             finally:
                 app.close()
 
+    def test_saved_dock_with_half_pixels_starts(self):
+        # Odd widget sizes centred on a saved point used to produce "+446.5" geometries.
+        for side, cx, cy in (("right", 1782, 524), ("right", 1782, 525), ("bottom", 901, 1100)):
+            with self.subTest(side=side, cy=cy), tempfile.TemporaryDirectory() as folder:
+                Path(folder, "settings.json").write_text(
+                    f'{{"render_mode":"colorkey","dock":["{side}",{cx},{cy}]}}', encoding="utf-8")
+                root = tk.Tk()
+                app = App(root, data_dir=Path(folder), network=False)
+                try:
+                    self.assertTrue(all(isinstance(v, int) for v in app.rect))
+                    self.assertEqual(app.dock["side"], side)
+                finally:
+                    app.close()
+
 if __name__ == "__main__":
     unittest.main()
