@@ -63,21 +63,11 @@ porcentaje usado de la ventana de 5 horas. Un guion significa que todavía no ha
 - Uso de la sesión de 5 horas y de la semana, con su barra.
 - Hora a la que se restablece cada límite y cuánto falta.
 - Hace cuánto se leyeron los datos, o «Actualizando…» mientras consulta.
-- Si llevas cinco minutos sin actividad, indica «sin actividad» y reduce las consultas;
-  al volver, actualiza ambos servicios y recupera el ritmo habitual.
-- El anillo y cada barra cambian a ámbar desde el 80 % y a rojo desde el 95 %.
-- «Avisos» en el menú muestra una notificación de Windows una vez por cada sesión de
-  cinco horas al llegar al 90 %. Puedes desactivarlos desde el mismo menú.
-- Si otra ventana ocupa toda la pantalla del monitor del widget, este se oculta y vuelve
-  al salir de pantalla completa. No se oculta mientras lo arrastras o anima.
+- «En pausa: sin actividad» cuando las consultas están reducidas porque no estás.
 - El motivo si no ha podido leer los datos, por ejemplo una sesión caducada.
 
-## Transparencia del widget
-
-Por defecto, `render_mode` está en `auto`: el widget intenta usar alfa por píxel de Windows
-para suavizar los bordes y vuelve al modo de color clave si no puede inicializarlo. Para
-forzar el modo anterior, establece `"render_mode": "colorkey"` en
-`.runtime/settings.json`. El valor `"auto"` se restaura si el campo falta o no es válido.
+**Colores:** el anillo y cada barra usan el color del servicio por debajo del 80 %, ámbar
+desde el 80 % y rojo desde el 95 %. Cada barra se colorea según su propio porcentaje.
 
 **Imán:**
 
@@ -95,8 +85,36 @@ forzar el modo anterior, establece `"render_mode": "colorkey"` en
 
 - Doble clic: actualiza al momento los servicios activos y reinicia el ritmo rápido de
   consultas de Claude.
-- Clic derecho: menú para elegir servicios, «Actualizar» y «Cerrar». Es la única forma de
-  cerrarlo, porque el widget no tiene barra de título.
+- Clic derecho: menú para elegir servicios, activar o desactivar «Avisos», «Actualizar» y
+  «Cerrar». Es la única forma de cerrarlo, porque el widget no tiene barra de título.
+
+## Avisos
+
+Cuando la sesión de 5 horas de un servicio llega al **90 %**, aparece una notificación de
+Windows («Claude al 90 %» o «Codex al 90 %») con la hora a la que se restablece. Sale una
+sola vez por cada ventana de 5 horas, aunque reinicies el widget: las ventanas ya avisadas
+se guardan en `.runtime/alerts.json`.
+
+Se activan o desactivan con la casilla «Avisos» del clic derecho; la elección se guarda en
+`.runtime/settings.json`. La notificación se muestra con PowerShell, sin instalar nada, y el
+texto se escapa y se pasa codificado, nunca como parte del comando.
+
+## Pantalla completa
+
+Si una aplicación ocupa toda la pantalla del monitor en el que está el widget (un juego, un
+vídeo, una presentación o el navegador con F11), el widget se oculta y vuelve al salir. Las
+ventanas maximizadas no cuentan, y en otro monitor tampoco. No se oculta mientras lo
+arrastras o durante una animación, y las consultas siguen funcionando mientras está oculto.
+
+## Transparencia
+
+El widget usa la transparencia por píxel de Windows (ventana por capas): los bordes y el
+rebote quedan suaves sobre cualquier fondo, y las zonas transparentes dejan pasar los clics
+a lo que hay debajo. Si no se puede inicializar o falla al dibujar, vuelve solo al modo
+anterior de color clave, con un fino contorno oscuro en los bordes.
+
+Para forzar el modo anterior, pon `"render_mode": "colorkey"` en `.runtime/settings.json`.
+El valor por defecto es `"auto"`, que también se usa si el campo falta o no es válido.
 
 ## Claude: la cuota y cómo se lee
 
@@ -196,16 +214,21 @@ Para no gastar cuando no hace falta, la frecuencia se adapta a la actividad
 Las lecturas de la línea de estado pueden acelerar el ritmo si traen un cambio, pero nunca
 lo frenan.
 
+**Sin actividad:** si llevas 5 minutos o más sin tocar el teclado ni el ratón (también con
+el PC bloqueado), Claude pasa directamente a **cada 30 minutos** y Codex a **cada
+5 minutos**. Al volver, consulta los dos servicios al momento y Claude retoma el ritmo de
+30 segundos, como con un doble clic.
+
 | Situación | Consultas por hora | Tokens de Haiku por hora |
 | --- | --- | --- |
 | Trabajando, el contador se mueve | unas 120 | unos 180.000 |
-| En reposo, fase de 30 minutos | 2 | unos 3.000 |
+| En reposo o sin actividad, fase de 30 minutos | 2 | unos 3.000 |
 | Widget cerrado o Claude desactivado | 0 | 0 |
 
 ## Codex
 
 El widget consulta `account/rateLimits/read` a través del `app-server` de Codex CLI, cada
-**30 segundos** y con doble clic. Es una consulta de estado de la cuenta: no inicia
+**30 segundos** (cada 5 minutos si no hay actividad) y con doble clic. Es una consulta de estado de la cuenta: no inicia
 conversaciones ni gasta tokens. Código: `usage_monitor/codex.py`.
 
 Usa la cuenta con la que tengas iniciada sesión en Codex CLI, que puede no ser la misma que
@@ -214,8 +237,9 @@ ausente, nunca como cero.
 
 ## Datos y privacidad
 
-- `.runtime/` guarda solo preferencias (servicios elegidos y posición del widget) y las
-  últimas lecturas de cuota. Está excluida de Git y no contiene credenciales.
+- `.runtime/` guarda solo preferencias (servicios elegidos, avisos, modo de transparencia
+  y posición del widget), las últimas lecturas de cuota y, en `alerts.json`, qué ventanas
+  de 5 horas ya se avisaron. Está excluida de Git y no contiene credenciales.
 - `.runtime/statusline-diagnostico.json` registra la hora de la última llamada de la línea
   de estado y los nombres de los campos recibidos, nunca su contenido. Sirve para
   diagnosticar.
@@ -276,10 +300,11 @@ py -3 -m unittest discover -s tests -p ui_smoke.py -v
 ```
 
 Cubren la validación de datos y de ajustes, el ritmo adaptativo, el protocolo de Codex, el
-dibujo con uno y dos servicios, la opción `--providers` y pruebas reales de la ventana:
-tirón corto y largo, imán al borde, orientación, ampliación, selección de servicios sin
-consultas de los desactivados, un único bucle de consulta tras activar y desactivar, y
-cierre limpio.
+dibujo con uno y dos servicios, la opción `--providers`, la inactividad, los colores y
+avisos (una vez por ventana, escapado del texto), la detección de pantalla completa, la
+transparencia por capas con su alternativa, y pruebas reales de la ventana: tirón corto y
+largo, imán al borde, orientación, ampliación, selección de servicios sin consultas de los
+desactivados, un único bucle de consulta tras activar y desactivar, y cierre limpio.
 
 ## Alternativas descartadas
 
