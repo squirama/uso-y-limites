@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from usage_monitor.models import UsageSnapshot, WindowUsage
+from usage_monitor.fullscreen import window_covers_monitor
 from usage_monitor.ui import App
 
 
@@ -264,6 +265,12 @@ class UiSmokeTests(unittest.TestCase):
                     withdraw.assert_not_called()
             finally:
                 app.close()
+
+    def test_maximized_window_is_not_treated_as_fullscreen(self):
+        monitor = (0, 0, 1920, 1080)
+        maximized_rect = (-8, -8, 1928, 1088)
+        self.assertFalse(window_covers_monitor(maximized_rect, monitor, is_zoomed=True))
+        self.assertTrue(window_covers_monitor((0, 0, 1920, 1080), monitor))
 
 if __name__ == "__main__":
     unittest.main()

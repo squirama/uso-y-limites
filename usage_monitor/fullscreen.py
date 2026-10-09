@@ -8,6 +8,15 @@ import os
 SHELL_CLASSES = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
 
 
+def window_covers_monitor(window_rect, monitor_rect, is_zoomed=False):
+    if is_zoomed:
+        return False
+    left, top, right, bottom = window_rect
+    monitor_left, monitor_top, monitor_right, monitor_bottom = monitor_rect
+    return (left <= monitor_left and top <= monitor_top
+            and right >= monitor_right and bottom >= monitor_bottom)
+
+
 def foreground_is_fullscreen(monitor_point):
     if os.name != "nt":
         return False
@@ -51,6 +60,10 @@ def foreground_is_fullscreen(monitor_point):
         foreground_monitor = user32.MonitorFromWindow(foreground, 2)
         if not target_monitor or foreground_monitor != target_monitor:
             return False
+        user32.IsZoomed.argtypes = [ctypes.wintypes.HWND]
+        user32.IsZoomed.restype = ctypes.wintypes.BOOL
+        if user32.IsZoomed(foreground):
+            return False
 
         rect = RECT()
         user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(RECT)]
@@ -62,7 +75,9 @@ def foreground_is_fullscreen(monitor_point):
         if not user32.GetMonitorInfoW(ctypes.c_void_p(target_monitor), ctypes.byref(info)):
             return False
         monitor = info.rcMonitor
-        return (rect.left <= monitor.left and rect.top <= monitor.top
-                and rect.right >= monitor.right and rect.bottom >= monitor.bottom)
+        return window_covers_monitor(
+            (rect.left, rect.top, rect.right, rect.bottom),
+            (monitor.left, monitor.top, monitor.right, monitor.bottom),
+        )
     except (AttributeError, OSError, TypeError, ValueError, OverflowError):
         return False
