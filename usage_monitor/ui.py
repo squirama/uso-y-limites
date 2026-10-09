@@ -13,7 +13,11 @@ import tkinter as tk
 
 from PIL import Image, ImageTk
 
-from . import capture, glass, render
+from . import capture, render
+try:
+    from . import glass
+except ImportError:  # numpy missing: the widget still works, without the glass look.
+    glass = None
 from .claude_probe import ClaudeProbe
 from .codex import CodexClient
 from .fullscreen import foreground_is_fullscreen
@@ -466,7 +470,7 @@ class App:
         self._bind_pointer(self.canvas)
 
     def _enable_glass(self):
-        if not self.layered or self.glass_failed:
+        if not self.layered or self.glass_failed or glass is None:
             return False
         try:
             hwnd = int(self.root.wm_frame(), 16)

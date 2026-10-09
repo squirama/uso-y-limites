@@ -8,7 +8,9 @@ de la pantalla como un imán. Puedes mostrar los dos servicios o solo uno.
 
 - Windows 10 u 11.
 - Python 3.11 o posterior con Tkinter (incluido en el instalador oficial de python.org).
-- Pillow, para dibujar los anillos y el texto suavizados (se instala con `requirements.txt`).
+- Pillow, para dibujar los anillos y el texto suavizados, y numpy, para el efecto Cristal
+  (los dos se instalan con `requirements.txt`). Sin numpy el widget funciona igual, sin
+  Cristal.
 - Solo las herramientas de los servicios que quieras ver, con sesión iniciada:
   - **Claude:** [Claude Code](https://code.claude.com) (`claude` en la terminal).
   - **Codex:** Codex CLI (`codex login`).
@@ -118,8 +120,12 @@ El valor por defecto es `"auto"`, que también se usa si el campo falta o no es 
 
 ## Cristal
 
-El modo **Cristal** desenfoca y refracta el fondo, y añade un velo y un brillo cuyo efecto
-cambia al ampliar el widget. Se activa por defecto cuando está disponible la ventana por
+El modo **Cristal** desenfoca y refracta el fondo, y añade un velo y un brillo. El velo cambia
+según el estado: casi transparente cuando llevas 3 segundos sin pasar el puntero por encima,
+algo más oscuro en compacto y más opaco al ampliar, para que el detalle se lea bien. Sobre
+fondos claros el velo no baja de un mínimo, para que los números sigan siendo legibles. El
+cristal se mantiene mientras arrastras el widget, mientras vuela hacia el borde y durante el
+rebote. Se activa por defecto cuando está disponible la ventana por
 capas. Puedes activarlo o desactivarlo con la casilla **Cristal** del menú del clic derecho;
 la preferencia se guarda en `.runtime/settings.json`.
 

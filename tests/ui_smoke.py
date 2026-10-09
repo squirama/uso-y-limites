@@ -409,6 +409,21 @@ class UiSmokeTests(unittest.TestCase):
             root.update()
             time.sleep(0.005)
 
+
+    def test_widget_starts_without_numpy_and_without_glass(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(ui_module, "glass", None):
+                root, app, layered = self.make_glass_app(
+                    folder, lambda rect: Image.new("RGB", rect[2:], (90, 110, 140)))
+                try:
+                    self.assertEqual(app.render_mode, "layered")
+                    self.assertFalse(app.glass_active)
+                    app.open = True
+                    app.place()
+                    self.assertEqual(layered.images[-1].mode, "RGBA")
+                finally:
+                    app.close()
+
     def test_glass_follows_drag_flight_and_bounce(self):
         def capture(rect):
             # A gradient, so crops at different positions really differ.
