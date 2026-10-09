@@ -199,7 +199,7 @@ def _wrap(text, typeface, width):
     return lines + ([line] if line else [])
 
 
-def _layout(providers, draw=None, shadow=False, muted=MUTED, track=TRACK):
+def _layout(providers, draw=None, shadow=False, muted=MUTED, track=TRACK, accent=False):
     """Lay out the expanded card; with draw=None only measures. Units are 1x pixels."""
     s, y = SS, PAD
     inner = EXPANDED_WIDTH - PAD * 2
@@ -213,7 +213,9 @@ def _layout(providers, draw=None, shadow=False, muted=MUTED, track=TRACK):
             if draw:
                 draw.rectangle((PAD * s, (y + 2) * s, (EXPANDED_WIDTH - PAD) * s, (y + 2) * s + 1), fill=track)
             y += 12
-        text(PAD, y, NAMES[provider.key], 13, TEXT, "medium")
+        # On glass, white text vanishes over light backgrounds: use each service's colour.
+        highlight = COLORS[provider.key] if accent else TEXT
+        text(PAD, y, NAMES[provider.key], 13, highlight, "medium")
         text(EXPANDED_WIDTH - PAD, y + 2, "Actualizando…" if provider.loading else provider.age, 11, muted, anchor="ra")
         y += 20
         if provider.message:
@@ -225,7 +227,7 @@ def _layout(providers, draw=None, shadow=False, muted=MUTED, track=TRACK):
             if row_index:
                 y += 6
             text(PAD, y, row.label, 12, TEXT)
-            text(EXPANDED_WIDTH - PAD, y, f"{row.percent:.0f} %", 12, TEXT, anchor="ra")
+            text(EXPANDED_WIDTH - PAD, y, f"{row.percent:.0f} %", 12, highlight, anchor="ra")
             y += 19
             if draw:
                 left, right = PAD * s, (EXPANDED_WIDTH - PAD) * s
@@ -259,7 +261,7 @@ def content(providers, vertical=False, expanded_view=False):
     image = Image.new("RGBA", (size[0] * SS, size[1] * SS), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     if expanded_view:
-        _layout(providers, draw, shadow=True, muted=GLASS_MUTED, track=GLASS_TRACK)
+        _layout(providers, draw, shadow=True, muted=GLASS_MUTED, track=GLASS_TRACK, accent=True)
     else:
         step = 48 * SS
         for index, provider in enumerate(providers):
@@ -267,7 +269,7 @@ def content(providers, vertical=False, expanded_view=False):
             cx = size[0] * SS / 2 + (0 if vertical else offset)
             cy = size[1] * SS / 2 + (offset if vertical else 0)
             _ring(draw, cx, cy, provider.percent, level_color(provider.key, provider.percent),
-                  GLASS_MUTED if provider.loading else TEXT, shadow=True, track=GLASS_TRACK)
+                  GLASS_MUTED if provider.loading else COLORS[provider.key], shadow=True, track=GLASS_TRACK)
     return _finish(image, size)
 
 

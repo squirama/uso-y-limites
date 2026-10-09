@@ -40,7 +40,7 @@ GLASS_REFRESH_MS, GLASS_AWAY_MS = 100, 1000
 POLL_MS, WATCH_MS, HOVER_MS, CLOCK_MS, CODEX_MS = 200, 3000, 60, 1000, 30000
 IDLE_THRESHOLD_SECONDS, RESUME_THRESHOLD_SECONDS = 300, 5
 AWAY_CLAUDE_SECONDS, AWAY_CODEX_MS = 1800, 300000
-GLASS_SETTLE_SECONDS, GLASS_TRANSITION_MS = 3, 300
+GLASS_SETTLE_SECONDS, GLASS_TRANSITION_MS = 0.8, 180
 GLASS_OPACITY = {"compact": 0.26, "rest": 0.08, "expanded": 0.58}
 GLASS_BRIGHT_MINIMUM = {"compact": 0.35, "rest": 0.18, "expanded": 0.62}
 GLASS_WIDE_MARGIN = 160     # Extra area captured around the widget while it moves.
@@ -686,6 +686,13 @@ class App:
             self.glass_surface = None
             self.glass_surface_key = None
 
+    def _settle_glass_veil(self):
+        """Jump to the resting veil at once, so the widget is not left dark after expanding."""
+        self.glass_transition = None
+        self.glass_opacity = GLASS_OPACITY["rest"]
+        self.glass_pointer_out_since = time.monotonic() - GLASS_SETTLE_SECONDS
+        self.glass_surface = None
+
     def _compact_radius(self, side=None):
         logical = render.compact_size(len(self.providers), vertical(side or self.dock["side"]))
         return self.px(render.shape_radius(logical))
@@ -701,8 +708,8 @@ class App:
             # No wide capture yet: repeat the last glass frame rather than flashing opaque.
             last = self.glass_last_frame
             return last if last is not None and last.size == size else None
-        opacity = self._current_glass_opacity()
-        floor = GLASS_BRIGHT_MINIMUM["compact"] if opacity >= 0.2 else GLASS_BRIGHT_MINIMUM["rest"]
+        # Moving, the widget is small and in the user's hand: keep the light resting veil.
+        opacity, floor = GLASS_OPACITY["rest"], GLASS_BRIGHT_MINIMUM["rest"]
         try:
             surface = glass.compose(background, size, glass.Tint(opacity=opacity, bright_minimum=floor),
                                     radius, self.scale)
@@ -868,6 +875,7 @@ class App:
             if math.dist(drag["start"], (event.x_root, event.y_root)) < self.px(4):
                 return
             drag["moved"] = True
+            self._settle_glass_veil()
             if self.open:
                 self.open = False
                 self.place()

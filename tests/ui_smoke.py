@@ -442,8 +442,12 @@ class UiSmokeTests(unittest.TestCase):
                     app.glass_wide_worker.join(timeout=2)
                     left, top, right, bottom = app.area()
                     before = len(calls)
+                    app.open, app.glass_opacity = True, ui_module.GLASS_OPACITY["expanded"]
                     app.on_motion(Event(x - 15, y + 5))
                     self.assertGreater(len(calls), before)
+                    # Grabbing it drops the dark expanded veil at once: moving uses the resting one.
+                    self.assertEqual(app.glass_opacity, ui_module.GLASS_OPACITY["rest"])
+                    self.assertFalse(app.open)
                     # A jump outside the wide capture repeats the last glass frame, never opaque.
                     app.on_motion(Event((left + right) // 2, bottom - 40))
                     self.assertIs(layered.images[-1], app.glass_last_frame)
