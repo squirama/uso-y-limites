@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.runtime/
+.venv/
+dist/
+build/
+*.spec
+.env
+.env.*
+project-context.json
+PLAN_CODEX.md
+output/
