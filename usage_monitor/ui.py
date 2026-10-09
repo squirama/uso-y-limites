@@ -653,6 +653,8 @@ class App:
             self.observe_claude(snapshot, scheduled=False)
             self.snapshots["claude"] = snapshot
             self.errors["claude"] = ""
+            # Status line readings must alert too, not only the widget's own queries.
+            self.check_alerts("claude", snapshot)
             self.redraw()
         self.loop("watch", WATCH_MS, self.watch_claude)
 

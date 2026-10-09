@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from usage_monitor.models import UsageSnapshot, WindowUsage
 from usage_monitor.fullscreen import window_covers_monitor
+from usage_monitor.storage import save_snapshot
 from usage_monitor.ui import App
 
 
@@ -204,6 +205,21 @@ class UiSmokeTests(unittest.TestCase):
                 app.check_alerts("claude", disabled_window)
                 self.assertEqual(len(notices), 2)
                 self.assertFalse(app.settings["alerts"])
+            finally:
+                app.close()
+
+
+    def test_status_line_reading_also_alerts(self):
+        notices = []
+        with tempfile.TemporaryDirectory() as folder:
+            root, app = self.make_app(folder, ["claude"], notifier=lambda *args: notices.append(args))
+            try:
+                now = time.time()
+                save_snapshot("claude", UsageSnapshot((WindowUsage("5 horas", 91, now + 3600),),
+                                                      now, "Claude Code · barra de estado"), Path(folder))
+                app.watch_claude()
+                self.assertEqual(len(notices), 1)
+                self.assertEqual(notices[0][0], "Claude al 90 %")
             finally:
                 app.close()
 
