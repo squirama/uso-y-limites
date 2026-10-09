@@ -1,4 +1,5 @@
 import ctypes
+import os
 import unittest
 from unittest.mock import Mock, patch
 
@@ -60,6 +61,28 @@ class CaptureTests(unittest.TestCase):
                 capture.capture_screen((0, 0, 0, 1))
         windows.assert_not_called()
 
+
+    @unittest.skipUnless(os.name == "nt", "Requiere Windows")
+    def test_real_capture_then_layered_resize_share_gdi_structures(self):
+        # Regression: capture.py and layered.py once had separate BITMAPINFO classes, and
+        # resizing the layered window after a capture raised ctypes.ArgumentError.
+        import tkinter as tk
+        from PIL import Image
+        from usage_monitor.layered import LayeredWindow
+
+        root = tk.Tk()
+        root.overrideredirect(True)
+        root.geometry("40x40+0+0")
+        root.update()
+        layered = LayeredWindow(root)
+        try:
+            layered.render(Image.new("RGBA", (40, 40), (0, 0, 0, 0)), 0, 0)
+            self.assertEqual(capture.capture_screen((0, 0, 8, 8)).size, (8, 8))
+            layered.render(Image.new("RGBA", (60, 90), (0, 0, 0, 0)), 0, 0)
+            self.assertEqual(layered.bitmap_size, (60, 90))
+        finally:
+            layered.close(reset_style=True)
+            root.destroy()
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,31 +6,16 @@ import os
 
 from PIL import Image
 
+# One shared definition: ctypes argtypes live on the shared gdi32 object, and two
+# BITMAPINFO classes would make CreateDIBSection reject the other module's calls.
+from .layered import BITMAPINFO, BITMAPINFOHEADER
+
 
 SRCCOPY = 0x00CC0020
 DIB_RGB_COLORS = 0
 BI_RGB = 0
 WDA_NONE = 0x00
 WDA_EXCLUDEFROMCAPTURE = 0x11
-
-
-class BITMAPINFOHEADER(ctypes.Structure):
-    _fields_ = [("biSize", ctypes.wintypes.DWORD), ("biWidth", ctypes.wintypes.LONG),
-                ("biHeight", ctypes.wintypes.LONG), ("biPlanes", ctypes.wintypes.WORD),
-                ("biBitCount", ctypes.wintypes.WORD), ("biCompression", ctypes.wintypes.DWORD),
-                ("biSizeImage", ctypes.wintypes.DWORD),
-                ("biXPelsPerMeter", ctypes.wintypes.LONG),
-                ("biYPelsPerMeter", ctypes.wintypes.LONG), ("biClrUsed", ctypes.wintypes.DWORD),
-                ("biClrImportant", ctypes.wintypes.DWORD)]
-
-
-class RGBQUAD(ctypes.Structure):
-    _fields_ = [("rgbBlue", ctypes.c_ubyte), ("rgbGreen", ctypes.c_ubyte),
-                ("rgbRed", ctypes.c_ubyte), ("rgbReserved", ctypes.c_ubyte)]
-
-
-class BITMAPINFO(ctypes.Structure):
-    _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", RGBQUAD * 1)]
 
 
 def _windows_apis():
